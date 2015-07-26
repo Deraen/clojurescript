@@ -40,6 +40,24 @@
     `(binding [ana/*cljs-warnings* ~no-warnings]
        ~@body)))
 
+(defmacro with-warning-handlers
+  "Use the given warning handlers for any analysis executed in body.
+
+   Warning handler should be a function taking three arguments:
+   warning-type, env and extra."
+  [handlers & body]
+  `(ana/with-warning-handlers ~handlers ~@body))
+
+(defmacro vary-warning-handlers
+  "Update warning handlers for any analysis executed in body using the given function."
+  [f & body]
+  `(ana/with-warning-handlers (~f ana/*cljs-warning-handlers*) ~@body))
+
+(defn warning-enabled?
+  "Test if the given warning-type is enabled."
+  [warning-type]
+  (ana/*cljs-warnings* warning-type))
+
 (defn get-options
   "Return the compiler options from compiler state."
   []
