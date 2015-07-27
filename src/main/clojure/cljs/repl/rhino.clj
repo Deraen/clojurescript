@@ -14,7 +14,8 @@
             [cljs.closure :as closure]
             [cljs.analyzer :as ana]
             [cljs.repl :as repl]
-            [cljs.util :as util])
+            [cljs.util :as util]
+            [cljs.stacktrace :as st])
   (:import [java.io File Reader]
            [org.mozilla.javascript Context ScriptableObject
                                    RhinoException Undefined]))
@@ -123,6 +124,8 @@
       (Context/javaToJS opts scope))
     (ScriptableObject/putProperty scope
       "out" (Context/javaToJS *out* scope))
+    (ScriptableObject/putProperty scope
+      "err" (Context/javaToJS *err* scope))
 
     ;; define file loading, load goog.base, load repl deps
     (rhino-eval repl-env "bootjs" 1 bootjs)
@@ -134,7 +137,8 @@
     (repl/evaluate-form repl-env env "<cljs repl>"
       '(do
          (.require js/goog "cljs.core")
-         (set! *print-fn* (fn [x] (.write js/out x)))))
+         (set! *print-fn* (fn [x] (.write js/out x)))
+         (set! *print-err-fn* (fn [x] (.write js/err x)))))
 
     ;; allow namespace reloading
     (repl/evaluate-form repl-env env "<cljs repl>"
@@ -172,22 +176,9 @@
     {:output-dir ".cljs_rhino_repl"
      :wrap wrap-fn})
   repl/IParseStacktrace
-  (-parse-stacktrace [this frames-str ret {output-dir :output-dir}]
-    (vec
-      (map
-        (fn [frame-str]
-          (let [[file-side line-fn-side] (string/split frame-str #":")
-                file (string/replace file-side #"\s+at\s+" "")
-                [line function] (string/split line-fn-side #"\s+")]
-            {:file (string/replace file (str output-dir File/separator) "")
-             :function (when function
-                         (-> function
-                           (string/replace "(" "")
-                           (string/replace ")" "")))
-             :line (when line
-                     (Integer/parseInt line))
-             :column 0}))
-        (string/split frames-str #"\n"))))
+  (-parse-stacktrace [this frames-str ret opts]
+    (st/parse-stacktrace this frames-str
+      (assoc ret :ua-product :rhino) opts))
   repl/IGetError
   (-get-error [this e env opts]
     (let [{:keys [scope]} this

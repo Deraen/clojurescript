@@ -32,6 +32,12 @@
   [ns-sym]
   (string/replace (ana/munge-path ns-sym) \. \/))
 
+(defn file->ns
+  [file]
+  (let [lib-name (subs (string/replace file "/" ".")
+                   0 (- (count file) 5))]
+    (symbol (demunge lib-name))))
+
 (defn atom? [x]
   (instance? Atom x))
 
@@ -56,10 +62,12 @@
   respected). Upon resolution the callback should be invoked with a map
   containing the following keys:
 
-  :lang   - the language, :clj or :js
-  :source - the source of the library (a string)
-  :cache  - optional, if a :clj namespace has been precompiled to :js, can give
-            an analysis cache for faster loads.
+  :lang       - the language, :clj or :js
+  :source     - the source of the library (a string)
+  :cache      - optional, if a :clj namespace has been precompiled to :js, can
+                give an analysis cache for faster loads.
+  :source-map - optional, if a :clj namespace has been precompiled to :js, can
+                give a V3 source map JSON
 
   If the resource could not be resolved, the callback should be invoked with
   nil."
@@ -97,12 +105,19 @@
    eval and eval-str."
   ([]
    (doto (env/default-compiler-env)
-     (swap! assoc-in [::ana/namespaces 'cljs.core] (dump-core))))
+     (swap!
+       (fn [state]
+         (-> state
+           (assoc-in [::ana/namespaces 'cljs.core] (dump-core)))))))
   ([init]
    (doto (empty-state) (swap! init))))
 
 (defn load-analysis-cache! [state ns cache]
   (swap! state assoc-in [::ana/namespaces ns] cache))
+
+(defn load-source-map! [state ns sm-json]
+  (let [sm (sm/decode (.parse js/JSON sm-json))]
+    (swap! state assoc-in [:source-maps ns] sm)))
 
 (defn sm-data []
   (atom
@@ -110,23 +125,31 @@
      :gen-col    0
      :gen-line   0}))
 
-(defn append-source-map [state name source sb sm-data opts]
+(defn prefix [s pre]
+  (str pre s))
+
+(defn append-source-map
+  [state name source sb sm-data {:keys [output-dir asset-path] :as opts}]
    (let [t    (.valueOf (js/Date.))
          smn  (if name
-                (munge name)
+                (string/replace (munge (str name)) "." "/")
                 (str "cljs-" t))
-         src  (str smn ".cljs")
-         file (str smn ".js")
+         ts   (.valueOf (js/Date.))
+         out  (or output-dir asset-path)
+         src  (cond-> (str smn ".cljs?rel=" ts)
+                out (prefix (str out "/")))
+         file (cond-> (str smn ".js?rel=" ts)
+                out (prefix (str out "/")))
          json (sm/encode {src (:source-map sm-data)}
                 {:lines (+ (:gen-line sm-data) 3)
-                 :file file :sources-content [source]})]
+                 :file  file :sources-content [source]})]
      (when (:verbose opts) (debug-prn json))
      (swap! state assoc-in
        [:source-maps name] (sm/invert-reverse-map (:source-map sm-data)))
      (.append sb
        (str "\n//# sourceURL=" file
             "\n//# sourceMappingURL=data:application/json;base64,"
-            (base64/encodeString json true)))))
+            (base64/encodeString json)))))
 
 ;; -----------------------------------------------------------------------------
 ;; Analyze
@@ -165,7 +188,7 @@
             (assert (or (map? resource) (nil? resource))
               "*load-fn* may only return a map or nil")
             (if resource
-              (let [{:keys [lang source cache]} resource]
+              (let [{:keys [lang source cache source-map]} resource]
                 (condp = lang
                   :clj (eval-str* bound-vars source name opts
                          (fn [res]
@@ -177,6 +200,9 @@
                                    (when cache
                                      (load-analysis-cache!
                                        (:*compiler* bound-vars) name cache))
+                                   (when source-map
+                                     (load-source-map!
+                                       (:*compiler* bound-vars) name source-map))
                                    (catch :default cause
                                      (wrap-error
                                        (ana/error env
@@ -212,7 +238,10 @@
            (-> (:*cljs-dep-set* bound-vars) meta :dep-path)))
        (if (seq deps)
          (let [dep (first deps)]
-           (require bound-vars dep opts
+           (require bound-vars dep
+             (-> opts
+               (dissoc :context)
+               (dissoc :ns))
              (fn [res]
                (if-not (:error res)
                  (load-deps bound-vars ana-env lib (next deps) opts cb)
@@ -266,7 +295,11 @@
           k    (or (k reload)
                    (get-in reloads [k nsym])
                    (and (= nsym name) (:*reload-macros* bound-vars) :reload))]
-      (require bound-vars nsym k (assoc opts :macros-ns true)
+      (require bound-vars nsym k
+        (-> opts
+          (assoc :macros-ns true)
+          (dissoc :context)
+          (dissoc :ns))
         (fn [res]
           (if-not (:error res)
             (load-macros bound-vars k (next macros) reload reloads opts cb)
@@ -339,14 +372,13 @@
   (let [rdr        (rt/indexing-push-back-reader source 1 name)
         eof        (js-obj)
         aenv       (ana/empty-env)
-        bound-vars (cond-> (merge bound-vars
-                             {:*cljs-ns* 'cljs.user
-                              :*ns* (create-ns ana/*cljs-ns*)})
+        the-ns     (or (:ns opts) 'cljs.user)
+        bound-vars (cond-> (merge bound-vars {:*cljs-ns* the-ns})
                      (:source-map opts) (assoc :*sm-data* (sm-data)))]
     ((fn analyze-loop []
        (binding [env/*compiler*         (:*compiler* bound-vars)
                  ana/*cljs-ns*          (:*cljs-ns* bound-vars)
-                 *ns*                   (:*ns* bound-vars)
+                 *ns*                   (create-ns (:*cljs-ns* bound-vars))
                  r/*data-readers*       (:*data-readers* bound-vars)
                  comp/*source-map-data* (:*sm-data* bound-vars)]
          (let [res (try
@@ -422,14 +454,13 @@
 ;; Eval
 
 (defn eval* [bound-vars form opts cb]
-  (let [bound-vars (cond-> (merge bound-vars
-                             {:*cljs-ns* 'cljs.user
-                              :*ns* (create-ns ana/*cljs-ns*)})
+  (let [the-ns     (or (:ns opts) 'cljs.user)
+        bound-vars (cond-> (merge bound-vars {:*cljs-ns* the-ns})
                      (:source-map opts) (assoc :*sm-data* (sm-data)))]
     (binding [env/*compiler*         (:*compiler* bound-vars)
               *eval-fn*              (:*eval-fn* bound-vars)
               ana/*cljs-ns*          (:*cljs-ns* bound-vars)
-              *ns*                   (:*ns* bound-vars)
+              *ns*                   (create-ns (:*cljs-ns* bound-vars))
               r/*data-readers*       (:*data-readers* bound-vars)
               comp/*source-map-data* (:*sm-data* bound-vars)]
       (let [aenv (ana/empty-env)
@@ -480,8 +511,6 @@
   ([state form opts cb]
    (eval*
      {:*compiler*     state
-      :*cljs-ns*      'cljs.user
-      :*ns*           (create-ns 'cljs.user)
       :*data-readers* tags/*cljs-data-readers*
       :*analyze-deps* (or (:analyze-deps opts) true)
       :*load-macros*  (or (:load-macros opts) true)
@@ -497,15 +526,14 @@
         eof        (js-obj)
         aenv       (ana/empty-env)
         sb         (StringBuffer.)
-        bound-vars (cond-> (merge bound-vars
-                             {:*cljs-ns* 'cljs.user
-                              :*ns* (create-ns ana/*cljs-ns*)})
+        the-ns     (or (:ns opts) 'cljs.user)
+        bound-vars (cond-> (merge bound-vars {:*cljs-ns* the-ns})
                      (:source-map opts) (assoc :*sm-data* (sm-data)))]
     ((fn compile-loop []
        (binding [env/*compiler*         (:*compiler* bound-vars)
                  *eval-fn*              (:*eval-fn* bound-vars)
                  ana/*cljs-ns*          (:*cljs-ns* bound-vars)
-                 *ns*                   (:*ns* bound-vars)
+                 *ns*                   (create-ns (:*cljs-ns* bound-vars))
                  r/*data-readers*       (:*data-readers* bound-vars)
                  comp/*source-map-data* (:*sm-data* bound-vars)]
          (let [res (try
@@ -589,9 +617,8 @@
         eof        (js-obj)
         aenv       (ana/empty-env)
         sb         (StringBuffer.)
-        bound-vars (cond-> (merge bound-vars
-                             {:*cljs-ns* 'cljs.user
-                              :*ns* (create-ns ana/*cljs-ns*)})
+        the-ns     (or (:ns opts) 'cljs.user)
+        bound-vars (cond-> (merge bound-vars {:*cljs-ns* the-ns})
                      (:source-map opts) (assoc :*sm-data* (sm-data)))]
     (when (:verbose opts) (debug-prn "Evaluating" name))
     ((fn compile-loop [ns]
@@ -645,11 +672,21 @@
                                     :name   name
                                     :path   (ns->relpath name)
                                     :source js-source
-                                    :cache  (get-in env/*compiler*
-                                              [::ana/namespaces name])}]
-                    (when (:verbose opts)
-                      (debug-prn js-source))
-                    (cb {:ns ns :value (*eval-fn* evalm)})))))))))
+                                    :cache  (get-in env/*compiler* [::ana/namespaces name])}
+                         complete  (fn [res]
+                                     (if (:error res)
+                                       (cb res)
+                                       (do
+                                         (when (:verbose opts)
+                                           (debug-prn js-source))
+                                         (let [res (try
+                                                     {:ns ns :value (*eval-fn* evalm)}
+                                                     (catch :default cause
+                                                       (wrap-error (ana/error aenv "ERROR" cause))))]
+                                           (cb res)))))]
+                     (if-let [f (:cache-source opts)]
+                       (f evalm complete)
+                       (complete {:value nil}))))))))))
       (:*cljs-ns* bound-vars))))
 
 (defn eval-str
@@ -667,9 +704,15 @@
   opts (map)
     compilation options.
 
-    :eval       - eval function to invoke, see *eval-fn*
-    :load       - library resolution function, see *load-fn*
-    :source-map - set to true to generate inline source map information
+    :eval         - eval function to invoke, see *eval-fn*
+    :load         - library resolution function, see *load-fn*
+    :source-map   - set to true to generate inline source map information
+    :cache-source - optional, a function to run side-effects with the
+                    compilation result prior to actual evalution. This function
+                    takes two arguments, the first is the eval map, the source
+                    will be under :source. The second argument is a callback of
+                    one argument. If an error occurs an :error key should be
+                    supplied.
 
   cb (function)
     callback, will be invoked with a map. If succesful the map will contain

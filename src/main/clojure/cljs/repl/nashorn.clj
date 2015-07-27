@@ -15,7 +15,8 @@
             [cljs.util :as util]
             [cljs.repl :as repl]
             [cljs.compiler :as comp]
-            [cljs.closure :as closure])
+            [cljs.closure :as closure]
+            [cljs.stacktrace :as st])
   (:import [java.io File]
            [javax.script ScriptEngine ScriptEngineManager ScriptException ScriptEngineFactory]
            [com.google.common.base Throwables]))
@@ -120,7 +121,8 @@
             '(do
                (.require js/goog "cljs.core")
                (set! *print-newline* false)
-               (set! *print-fn* js/print)))
+               (set! *print-fn* js/print)
+               (set! *print-err-fn* js/print)))
           ;; monkey-patch goog.isProvided_ to suppress useless errors
           (repl/evaluate-form this env repl-filename
             '(set! js/goog.isProvided_ (fn [ns] false)))
@@ -157,20 +159,9 @@
         (load-ns engine ns))
       (-tear-down [this])
       repl/IParseStacktrace
-      (-parse-stacktrace [this frames-str ret {output-dir :output-dir}]
-        (vec
-          (map
-            (fn [frame-str]
-              (let [frame-str (string/replace frame-str #"\s+at\s+" "")
-                    [function file-and-line] (string/split frame-str #"\s+")
-                    [file-part line-part] (string/split file-and-line #":")]
-                {:file (string/replace (.substring file-part 1)
-                         (str output-dir File/separator) "")
-                 :function function
-                 :line (Integer/parseInt
-                         (.substring line-part 0 (dec (.length line-part))))
-                 :column 0}))
-            (string/split frames-str #"\n"))))
+      (-parse-stacktrace [this frames-str ret opts]
+        (st/parse-stacktrace this frames-str
+          (assoc ret :ua-product :nashorn) opts))
       repl/IParseError
       (-parse-error [_ err _]
         (update-in err [:stacktrace]

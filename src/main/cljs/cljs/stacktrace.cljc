@@ -7,10 +7,12 @@
 ;; You must not remove this notice, or any other, from this software.
 
 (ns cljs.stacktrace
-  (:require #?(:clj  [cljs.util :as util]
-               :cljs [goog.string :as gstring])
-               [clojure.string :as string])
-  #?(:clj (:import [java.util.regex Pattern])))
+  (:require #?@(:clj  [[cljs.util :as util]
+                       [clojure.java.io :as io]]
+                :cljs [[goog.string :as gstring]])
+            [clojure.string :as string])
+  #?(:clj (:import [java.util.regex Pattern]
+                   [java.io File])))
 
 (defmulti parse-stacktrace (fn [repl-env st err opts] (:ua-product err)))
 
@@ -333,4 +335,242 @@ goog.events.handleBrowserEvent_@http://localhost:9000/out/goog/events/events.js:
 goog.events.getProxy/f<@http://localhost:9000/out/goog/events/events.js:276:16"
     {:ua-product :firefox}
     nil)
+  )
+
+;; -----------------------------------------------------------------------------
+;; Rhino Stacktrace
+
+(defmethod parse-stacktrace :rhino
+  [repl-env st err {:keys [output-dir] :as opts}]
+  (letfn [(process-frame [frame-str]
+            (when-not (or (string/blank? frame-str)
+                          (== -1 (.indexOf frame-str "\tat")))
+              (let [[file-side line-fn-side] (string/split frame-str #":")
+                   file                      (string/replace file-side #"\s+at\s+" "")
+                   [line function]           (string/split line-fn-side #"\s+")]
+               {:file     (string/replace file
+                            (str output-dir
+                              #?(:clj File/separator :cljs "/"))
+                            "")
+                :function (when function
+                            (-> function
+                              (string/replace "(" "")
+                              (string/replace ")" "")))
+                :line     (when (and line (not (string/blank? line)))
+                            (parse-int line))
+                :column   0})))]
+    (->> (string/split st #"\n")
+      (map process-frame)
+      (remove nil?)
+      vec)))
+
+(comment
+  (parse-stacktrace {}
+    "\tat .cljs_rhino_repl/goog/../cljs/core.js:4215 (seq)
+     \tat .cljs_rhino_repl/goog/../cljs/core.js:4245 (first)
+     \tat .cljs_rhino_repl/goog/../cljs/core.js:5295 (ffirst)
+     \tat <cljs repl>:1
+     \tat <cljs repl>:1"
+    {:ua-product :rhino}
+    {:output-dir ".cljs_rhino_repl"})
+
+  (parse-stacktrace {}
+    "org.mozilla.javascript.JavaScriptException: Error: 1 is not ISeqable (.cljs_rhino_repl/goog/../cljs/core.js#3998)
+   \tat .cljs_rhino_repl/goog/../cljs/core.js:3998 (cljs$core$seq)
+   \tat .cljs_rhino_repl/goog/../cljs/core.js:4017 (cljs$core$first)
+   \tat .cljs_rhino_repl/goog/../cljs/core.js:5160 (cljs$core$ffirst)
+   \tat .cljs_rhino_repl/goog/../cljs/core.js:16005
+   \tat .cljs_rhino_repl/goog/../cljs/core.js:16004
+   \tat .cljs_rhino_repl/goog/../cljs/core.js:10243
+   \tat .cljs_rhino_repl/goog/../cljs/core.js:10334
+   \tat .cljs_rhino_repl/goog/../cljs/core.js:3979 (cljs$core$seq)
+   \tat .cljs_rhino_repl/goog/../cljs/core.js:28083 (cljs$core$pr_sequential_writer)
+   \tat .cljs_rhino_repl/goog/../cljs/core.js:28811
+   \tat .cljs_rhino_repl/goog/../cljs/core.js:28267 (cljs$core$pr_writer_impl)
+   \tat .cljs_rhino_repl/goog/../cljs/core.js:28349 (cljs$core$pr_writer)
+   \tat .cljs_rhino_repl/goog/../cljs/core.js:28353 (cljs$core$pr_seq_writer)
+   \tat .cljs_rhino_repl/goog/../cljs/core.js:28416 (cljs$core$pr_sb_with_opts)
+   \tat .cljs_rhino_repl/goog/../cljs/core.js:28430 (cljs$core$pr_str_with_opts)
+   \tat .cljs_rhino_repl/goog/../cljs/core.js:28524
+   \tat .cljs_rhino_repl/goog/../cljs/core.js:28520 (cljs$core$pr_str)
+   at <cljs repl>:1
+   "
+    {:ua-product :rhino}
+    {:output-dir ".cljs_rhino_repl"})
+  )
+
+;; -----------------------------------------------------------------------------
+;; Nashorn Stacktrace
+
+(defmethod parse-stacktrace :nashorn
+  [repl-env st err {:keys [output-dir] :as opts}]
+  (letfn [(process-frame [frame-str]
+            (when-not (or (string/blank? frame-str)
+                        (== -1 (.indexOf frame-str "\tat")))
+              (let [frame-str               (string/replace frame-str #"\s+at\s+" "")
+                    [function file-and-line] (string/split frame-str #"\s+")
+                    [file-part line-part]    (string/split file-and-line #":")]
+                {:file     (string/replace (.substring file-part 1)
+                             (str output-dir File/separator) "")
+                 :function function
+                 :line     (when (and line-part (not (string/blank? line-part)))
+                             (parse-int
+                               (.substring line-part 0
+                                 (dec (count line-part)))))
+                 :column   0})))]
+    (->> (string/split st #"\n")
+      (map process-frame)
+      (remove nil?)
+      vec)))
+
+(comment
+  (parse-stacktrace {}
+    "Error: 1 is not ISeqable
+    \tat cljs$core$seq (.cljs_nashorn_repl/goog/../cljs/core.js:3998)
+    \tat cljs$core$first (.cljs_nashorn_repl/goog/../cljs/core.js:4017)
+    \tat cljs$core$ffirst (.cljs_nashorn_repl/goog/../cljs/core.js:5160)
+    \tat <anonymous> (.cljs_nashorn_repl/goog/../cljs/core.js:16005)
+    \tat <anonymous> (.cljs_nashorn_repl/goog/../cljs/core.js:16004)
+    \tat sval (.cljs_nashorn_repl/goog/../cljs/core.js:10243)
+    \tat cljs$core$ISeqable$_seq$arity$1-6 (.cljs_nashorn_repl/goog/../cljs/core.js:10334)
+    \tat cljs$core$seq (.cljs_nashorn_repl/goog/../cljs/core.js:3979)
+    \tat cljs$core$pr_sequential_writer (.cljs_nashorn_repl/goog/../cljs/core.js:28083)
+    \tat cljs$core$IPrintWithWriter$_pr_writer$arity$3-5 (.cljs_nashorn_repl/goog/../cljs/core.js:28811)
+    \tat cljs$core$pr_writer_impl (.cljs_nashorn_repl/goog/../cljs/core.js:28267)
+    \tat cljs$core$pr_writer (.cljs_nashorn_repl/goog/../cljs/core.js:28349)
+    \tat cljs$core$pr_seq_writer (.cljs_nashorn_repl/goog/../cljs/core.js:28353)
+    \tat cljs$core$pr_sb_with_opts (.cljs_nashorn_repl/goog/../cljs/core.js:28416)
+    \tat cljs$core$pr_str_with_opts (.cljs_nashorn_repl/goog/../cljs/core.js:28430)
+    \tat cljs$core$IFn$_invoke$arity$variadic-71 (.cljs_nashorn_repl/goog/../cljs/core.js:28524)
+    \tat cljs$core$pr_str (.cljs_nashorn_repl/goog/../cljs/core.js:28520)
+    \tat <anonymous> (<eval>:1)
+    \tat <program> (<eval>:1)\n"
+    {:ua-product :nashorn}
+    {:output-dir ".cljs_nashorn_repl"})
+  )
+
+;; -----------------------------------------------------------------------------
+;; Stacktrace Mapping
+
+(defn mapped-line-column-call
+  "Given a cljs.source-map source map data structure map a generated line
+   and column back to the original line, column, and function called."
+  [source-map line column]
+  ;; source maps are 0 indexed for columns
+  ;; multiple segments may exist at column
+  ;; the last segment seems most accurate
+  (letfn [(get-best-column [columns column]
+            (last (or (get columns
+                        (last (filter #(<= % (dec column))
+                                (sort (keys columns)))))
+                      (second (first columns)))))
+          (adjust [mapped]
+            (vec (map #(%1 %2) [inc inc identity] mapped)))]
+    (let [default [line column nil]]
+      ;; source maps are 0 indexed for lines
+      (if-let [columns (get source-map (dec line))]
+        (adjust (map (get-best-column columns column) [:line :col :name]))
+        default))))
+
+(defn mapped-frame
+  "Given opts and a canonicalized JavaScript stacktrace frame, return the
+  ClojureScript frame."
+  [{:keys [function file line column]} sm opts]
+  (let [no-source-file?      (if-not file true (starts-with? file "<"))
+        [line' column' call] (mapped-line-column-call sm line column)
+        file'                (if (ends-with? file ".js")
+                               (str (subs file 0 (- (count file) 3)) ".cljs")
+                               file)]
+    {:function function
+     :call     call
+     :file     (if no-source-file?
+                 (str "NO_SOURCE_FILE" (when file (str " " file)))
+                 file')
+     :line     line'
+     :column   column'}))
+
+(defn mapped-stacktrace
+  "Given a vector representing the canonicalized JavaScript stacktrace
+   return the ClojureScript stacktrace. The canonical stacktrace must be
+   in the form:
+
+    [{:file <string>
+      :function <string>
+      :line <integer>
+      :column <integer>}*]
+
+   :file must be a URL path (without protocol) relative to :output-dir or a
+   identifier delimited by angle brackets. The returned mapped stacktrace will
+   also contain :url entries to the original sources if it can be determined
+   from the classpath."
+  ([stacktrace sm] (mapped-stacktrace stacktrace sm nil))
+  ([stacktrace sm opts]
+   (letfn [(call->function [x]
+             (if (:call x)
+               (hash-map :function (:call x))
+               {}))
+           (call-merge [function call]
+             (merge-with
+               (fn [munged-fn-name unmunged-call-name]
+                 (if (= munged-fn-name
+                        (string/replace (munge unmunged-call-name) "." "$"))
+                   unmunged-call-name
+                   munged-fn-name))
+               function call))]
+     (let [mapped-frames (map (memoize #(mapped-frame % sm opts)) stacktrace)]
+       ;; take each non-nil :call and optionally merge it into :function one-level
+       ;; up to avoid replacing with local symbols, we only replace munged name if
+       ;; we can munge call symbol back to it
+       (vec (map call-merge
+              (map #(dissoc % :call) mapped-frames)
+              (concat (rest (map call->function mapped-frames)) [{}])))))))
+
+(defn mapped-stacktrace-str
+  "Given a vector representing the canonicalized JavaScript stacktrace
+   print the ClojureScript stacktrace. See mapped-stacktrace."
+  ([stacktrace sm]
+   (mapped-stacktrace-str stacktrace sm nil))
+  ([stacktrace sm opts]
+   (with-out-str
+     (doseq [{:keys [function file line column]}
+             (mapped-stacktrace stacktrace sm opts)]
+       (println "\t"
+         (str (when function (str function " "))
+              "(" file (when line (str ":" line))
+                       (when column (str ":" column)) ")"))))))
+
+(comment
+  (require '[cljs.closure :as cljsc]
+           '[clojure.data.json :as json]
+           '[cljs.source-map :as sm]
+           '[clojure.pprint :as pp])
+
+  (cljsc/build "samples/hello/src"
+    {:optimizations :none
+     :output-dir "samples/hello/out"
+     :output-to "samples/hello/out/hello.js"
+     :source-map true})
+
+  (def sm
+    (sm/decode
+      (json/read-str
+        (slurp "samples/hello/out/hello/core.js.map")
+        :key-fn keyword)))
+
+  (pp/pprint sm)
+
+  ;; maps to :line 5 :column 24
+  (mapped-stacktrace
+    [{:file "hello/core.js"
+      :function "first"
+      :line 6
+      :column 0}]
+    sm {:output-dir "samples/hello/out"})
+
+  (mapped-stacktrace-str
+    [{:file "hello/core.js"
+      :function "first"
+      :line 6
+      :column 0}]
+    sm {:output-dir "samples/hello/out"})
   )

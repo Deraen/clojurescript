@@ -9,7 +9,8 @@
 (ns cljs.js
   (:require [cljs.env :as env]
             [cljs.env.macros :as menv]
-            [cljs.analyzer :as ana]))
+            [cljs.analyzer :as ana]
+            [clojure.java.io :as io]))
 
 (defmacro with-state
   [state & body]
