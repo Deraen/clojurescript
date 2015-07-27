@@ -17,6 +17,9 @@
 ;; =============================================================================
 ;; Useful Utilities
 
+(defn api-opts [opts]
+  {#'ana/*cljs-warning-handlers* (or (:warning-handlers opts) ana/*cljs-warning-handlers*)})
+
 (defn empty-state
   "Creates an empty compilation state Atom<Map>."
   []
@@ -40,19 +43,6 @@
     `(binding [ana/*cljs-warnings* ~no-warnings]
        ~@body)))
 
-(defmacro with-warning-handlers
-  "Use the given warning handlers for any analysis executed in body.
-
-   Warning handler should be a function taking three arguments:
-   warning-type, env and extra."
-  [handlers & body]
-  `(ana/with-warning-handlers ~handlers ~@body))
-
-(defmacro vary-warning-handlers
-  "Update warning handlers for any analysis executed in body using the given function."
-  [f & body]
-  `(ana/with-warning-handlers (~f ana/*cljs-warning-handlers*) ~@body))
-
 (defn warning-enabled?
   "Test if the given warning-type is enabled."
   [warning-type]
@@ -72,7 +62,7 @@
   facilitate code walking without knowing the details of the op set."
   ([env form] (ana/analyze env form nil))
   ([env form name] (ana/analyze env form name nil))
-  ([env form name opts] (ana/analyze env form name opts)))
+  ([env form name opts] (with-bindings (api-opts opts) (ana/analyze env form name opts))))
 
 (defn forms-seq
   "Seq of Clojure/ClojureScript forms from rdr, a java.io.Reader. Optionally
@@ -92,7 +82,7 @@
    requested via opts where :restore is false."
   ([src] (ana/parse-ns src nil nil))
   ([src opts] (ana/parse-ns src nil opts))
-  ([src dest opts] (ana/parse-ns src dest opts)))
+  ([src dest opts] (with-bindings (api-opts opts) (ana/parse-ns src dest opts))))
 
 (defn analyze-file
   "Given a java.io.File, java.net.URL or a string identifying a resource on the
@@ -104,7 +94,7 @@
    \":output-dir/some/ns/foo.cljs.cache.edn\". This function does not return a
    meaningful value."
   ([f] (ana/analyze-file f nil))
-  ([f opts] (ana/analyze-file f opts)))
+  ([f opts] (with-bindings (api-opts opts) (ana/analyze-file f opts))))
 
 ;; =============================================================================
 ;; Main API

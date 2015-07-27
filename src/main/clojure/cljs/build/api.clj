@@ -19,7 +19,8 @@
             [cljs.closure :as closure]
             [clojure.set :refer [intersection]]
             [cljs.js-deps :as js-deps]
-            [clojure.java.io :as io])
+            [clojure.java.io :as io]
+            [cljs.analyzer.api :refer [api-opts]])
   (:import java.io.File))
 
 ;; =============================================================================
@@ -172,18 +173,18 @@
 (defn build
   "Given a source which can be compiled, produce runnable JavaScript."
   ([source opts]
-   (closure/build source opts))
+   (with-bindings (api-opts opts) (closure/build source opts)))
   ([source opts compiler-env]
-   (closure/build source opts compiler-env)))
+   (with-bindings (api-opts opts) (closure/build source opts compiler-env))))
 
 (defn watch
   "Given a source which can be compiled, watch it for changes to produce."
   ([source opts]
-   (closure/watch source opts))
+   (with-bindings (api-opts opts) (closure/watch source opts)))
   ([source opts compiler-env]
-   (closure/watch source opts compiler-env))
+   (with-bindings (api-opts opts) (closure/watch source opts compiler-env)))
   ([source opts compiler-env stop]
-   (closure/watch source opts compiler-env stop)))
+   (with-bindings (api-opts opts) (closure/watch source opts compiler-env stop))))
 
 (comment
 

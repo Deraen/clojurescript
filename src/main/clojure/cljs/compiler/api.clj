@@ -12,7 +12,8 @@
   (:require [cljs.util :as util]
             [cljs.env :as env]
             [cljs.analyzer :as ana]
-            [cljs.compiler :as comp]))
+            [cljs.compiler :as comp]
+            [cljs.analyzer.api :refer [api-opts]]))
 
 ;; =============================================================================
 ;; Main API
@@ -26,15 +27,15 @@
 (defn with-core-cljs
   "Ensure that core.cljs has been loaded."
   ([] (comp/with-core-cljs nil))
-  ([opts] (comp/with-core-cljs opts (fn [])))
-  ([opts body] (comp/with-core-cljs opts body)))
+  ([opts] (with-bindings (api-opts opts) (comp/with-core-cljs opts (fn []))))
+  ([opts body] (with-bindings (api-opts opts) (comp/with-core-cljs opts body))))
 
 (defn requires-compilation?
   "Return true if the src file requires compilation."
   ([src dest]
    (comp/requires-compilation? src dest nil))
   ([src dest opts]
-   (comp/requires-compilation? src dest opts)))
+   (with-bindings (api-opts opts) (comp/requires-compilation? src dest opts))))
 
 (defn compile-file
   "Compiles src to a file of the same name, but with a .js extension,
@@ -54,7 +55,7 @@
   ([src dest]
    (comp/compile-file src dest))
   ([src dest opts]
-   (comp/compile-file src dest opts)))
+   (with-bindings (api-opts opts) (comp/compile-file src dest opts))))
 
 (defn cljs-files-in
   "Return a sequence of all .cljs and .cljc files in the given directory."
@@ -72,4 +73,4 @@
   ([src-dir target-dir]
    (comp/compile-root src-dir target-dir nil))
   ([src-dir target-dir opts]
-   (comp/compile-root src-dir target-dir opts)))
+   (with-bindings (api-opts opts) (comp/compile-root src-dir target-dir opts))))

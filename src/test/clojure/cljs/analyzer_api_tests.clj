@@ -19,12 +19,12 @@
 
 (deftest with-warning-handlers-test
   (let [counter (atom 0)]
-    (ana-api/with-warning-handlers [(warning-handler counter)]
-      (ana-api/analyze (ana-api/empty-env) warning-form))
+    (ana-api/analyze (ana-api/empty-env) warning-form nil
+                     {:warning-handlers [(warning-handler counter)]})
     (is (= 1 @counter))))
 
 (deftest vary-warning-handlers-test
   (let [counter (atom 0)]
-    (ana-api/vary-warning-handlers (constantly [(warning-handler counter)])
-      (cljs.analyzer/all-warn (ana-api/analyze (ana-api/empty-env) warning-form)))
+    (cljs.analyzer/all-warn (ana-api/analyze (ana-api/empty-env) warning-form nil
+                                             {:warning-handlers [(warning-handler counter)]}))
     (is (= 1 @counter))))
