@@ -200,6 +200,13 @@
    {:pre [(symbol? ns)]}
    (swap! state update-in [::ana/namespaces] dissoc ns)))
 
+(defn ns-dependencies
+  "Given a namespace as a symbol return list of namespaces required by the namespace."
+  ([ns] (ns-dependencies env/*compiler* ns))
+  ([state ns]
+   {:pre [(symbol? ns)]}
+   (vals (get-in @state [::ana/namespaces ns :requires]))))
+
 (defmacro in-cljs-user
   "Binds cljs.analyzer/*cljs-ns* to 'cljs.user and uses the given compilation
   environment atom and runs body."

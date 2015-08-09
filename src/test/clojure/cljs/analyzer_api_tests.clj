@@ -32,3 +32,16 @@
       (ana-api/analyze test-cenv test-env warning-form nil
                        {:warning-handlers [(warning-handler counter)]}))
     (is (= 1 @counter))))
+
+(def test-cenv (ana-api/empty-state))
+(def test-env (assoc-in (ana-api/empty-env) [:ns :name] 'cljs.user))
+
+(ana-api/no-warn
+  (ana-api/in-cljs-user test-cenv
+    (ana-api/analyze test-cenv test-env
+      '(ns bar.core
+         (:require cljs.core))
+      nil nil)))
+
+(deftest ns-dependencies-test
+  (is (= '(cljs.core) (ana-api/ns-dependencies test-cenv 'bar.core))))
