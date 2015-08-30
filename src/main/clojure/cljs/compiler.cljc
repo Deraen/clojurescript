@@ -1319,6 +1319,7 @@
                                   (not (false? (:static-fns opts))))
                            (assoc opts :static-fns true)
                            opts)]
+                (println ns "requires-compilation" (requires-compilation? src-file dest-file opts))
                 (if (or (requires-compilation? src-file dest-file opts)
                       (:force opts))
                   (do
@@ -1328,9 +1329,11 @@
                                (not= :interactive (:mode opts)))
                       (swap! env/*compiler* update-in [::ana/namespaces] dissoc ns))
                     (let [ret (compile-file* src-file dest-file opts)]
+                      (println ns "inputs" *inputs* )
                       (when *dependents*
                         (swap! *dependents*
                           (fn [{:keys [recompile visited]}]
+                            (println ns "ns-dependents" (ana/ns-dependents ns (merge *inputs* nses)))
                             {:recompile (into recompile
                                           (ana/ns-dependents ns
                                             (merge *inputs* nses)))
