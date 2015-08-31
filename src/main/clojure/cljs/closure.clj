@@ -663,6 +663,51 @@
           required-cljs
           inputs)))))
 
+(defn cljs-dependencies-2
+  "Given set of cljs namespace symbols, find IJavaScript objects for the namespaces."
+  [requires]
+  ; FIXME: (remove #(or ((@env/*compiler* :js-dependency-index) %) (deps/find-classpath-lib %)))
+  (letfn [(namespaces->uris [namespaces]
+            (->> namespaces (map cljs-source-for-namespace) (keep :uri)))]
+    (loop [required-files (namespaces->uris requires)
+           visited (set required-files)
+           cljs-namespaces #{}]
+      (if (seq required-files)
+        (let [next-file (first required-files)
+              ns-info (ana/parse-ns next-file)
+              new-req (remove #(contains? visited %) (namespaces->uris (deps/-requires ns-info)))]
+          (recur (into (rest required-files) new-req)
+                 (into visited new-req)
+                 (conj cljs-namespaces ns-info)))
+        (disj cljs-namespaces nil)))))
+
+(defn find-dependency-sources
+  "Given list of IJavaScript objects, produce a new sequence of IJavaScript objects
+  of all dependencies of inputs."
+  [inputs]
+  ; FIXME: Stuff from add-dependencies still missing
+  ; - unprovided + warning
+  ; - goog/base.js
+  ; - required-js
+  ; - constants_table
+  (let [inputs        (set inputs)
+        requires      (set (mapcat deps/-requires inputs))
+        required-cljs (clojure.set/difference (cljs-dependencies-2 requires) inputs)]
+    required-cljs))
+
+(defn find-sources
+  "Given source directory, find all source files in the directory and
+  find all dependencies for sources in those the directory. Finally order all the sources
+  in dependency order."
+  [src-dir]
+  (let [inputs (comp/find-root-sources src-dir)]
+    (deps/dependency-order (concat inputs (find-dependency-sources inputs)))))
+
+(comment
+  (comp/find-sources-root "samples/hello/src")
+  (find-dependency-sources (find-sources-root "samples/hello/src"))
+  (find-sources "samples/hello/src"))
+
 (defn preamble-from-paths [paths]
   (when-let [missing (seq (remove io/resource paths))]
     (ana/warning :preamble-missing @env/*compiler* {:missing (sort missing)}))
