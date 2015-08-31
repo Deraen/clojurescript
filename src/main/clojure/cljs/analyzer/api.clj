@@ -199,6 +199,12 @@
    {:pre [(symbol? ns) (symbol? sym)]}
    (get-in @state [::ana/namespaces ns :defs sym])))
 
+(defn ns-dependencies
+  "Given a namespace as a symbol return list of namespaces required by the namespace."
+  ; ([ns] (ns-dependencies env/*compiler* ns))
+  ([state ns]
+   (vals (:requires (find-ns state ns)))))
+
 (defn remove-ns
   "Removes the namespace named by the symbol."
   ([ns]
@@ -214,3 +220,27 @@
   `(binding [cljs.analyzer/*cljs-ns* 'cljs.user]
      (cljs.env/with-compiler-env ~env
        ~@body)))
+
+(defn output-dependency-graph
+  ([] (output-dependency-graph env/*compiler*))
+  ([state]
+   (let [cljs-ns (->> (all-ns state)
+                      (map (fn [s]
+                             {:file     (.getPath (cljs.build.api/target-file-for-cljs-ns s))
+                              :provides [(str s)]
+                              :requires (map str (ns-dependencies state s))})))
+         all-ns  (vals (get-js-index state))
+         name->file (reduce (fn [acc x]
+                              (reduce (fn [acc provide]
+                                        (assoc acc provide (:file x)))
+                                      acc
+                                      (:provides x)))
+                            {}
+                            (concat cljs-ns all-ns))]
+     (reduce (fn [acc x]
+               (reduce (fn [acc provide]
+                         (assoc acc (name->file provide) (set (map #(or (name->file %) %) (:requires x)))))
+                       acc (:provides x)))
+             {}
+             (concat cljs-ns all-ns))
+     )))

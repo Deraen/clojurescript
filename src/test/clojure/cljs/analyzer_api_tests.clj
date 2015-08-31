@@ -32,3 +32,22 @@
       (ana-api/analyze test-cenv test-env warning-form nil
                        {:warning-handlers [(warning-handler counter)]}))
     (is (= 1 @counter))))
+
+(def test-cenv (ana-api/empty-state))
+(def test-env (assoc-in (ana-api/empty-env) [:ns :name] 'cljs.user))
+
+(ana-api/no-warn
+  (ana-api/in-cljs-user
+    (ana-api/analyze test-cenv test-env
+                     '(ns cljs.user
+                        (:use [clojure.string :only [join]])) nil nil)))
+
+(deftest output-dependency-graph-test
+
+  (let [g (ana-api/output-dependency-graph test-cenv)]
+    (is (= #{"goog/string/string.js" "goog/string/stringbuffer.js"}
+           (get g "out/clojure/string.js")))
+    (is (= #{"out/clojure/string.js"}
+           (get g "out/cljs/user.js")))
+    (is (= #{}
+           (get g "out/cljs/core.js")))))
