@@ -677,34 +677,67 @@
            cljs-namespaces #{}]
       (if (seq required-files)
         (let [next-file (first required-files)
-              ns-info (ana/parse-ns next-file)
+              ns-info (ana/parse-ns (:uri next-file))
               new-req (remove #(contains? visited %) (cljs-deps (deps/-requires ns-info)))]
           (recur (into (rest required-files) new-req)
                  (into visited new-req)
                  (conj cljs-namespaces ns-info)))
         (disj cljs-namespaces nil)))))
 
-(defn find-dependency-sources
+(defn add-dependency-sources
   "Given list of IJavaScript objects, produce a new sequence of IJavaScript objects
   of all dependencies of inputs."
   [inputs]
-  ; FIXME: Stuff from add-dependencies still missing
-  ; - unprovided + warning
-  ; - goog/base.js
-  ; - required-js
-  ; - constants_table
   (let [inputs        (set inputs)
-        requires      (set (mapcat deps/-requires inputs))
-        required-cljs (clojure.set/difference (cljs-dependencies-2 requires) inputs)]
-    required-cljs))
+        requires      (set (mapcat deps/-requires inputs))]
+    (into inputs (cljs-dependencies-2 requires))))
 
-(defn find-sources
-  "Given source directory, find all source files in the directory and
-  find all dependencies for sources in those the directory. Finally order all the sources
-  in dependency order."
-  [src-dir]
-  (let [inputs (comp/find-root-sources src-dir)]
-    (deps/dependency-order (concat inputs (find-dependency-sources inputs)))))
+(defn check-unprovided
+  [inputs]
+  (let [requires   (set (mapcat deps/-requires inputs))
+        provided   (set (mapcat deps/-provides inputs))
+        unprovided (clojure.set/difference requires provided #{"constants-table"})]
+    (when (seq unprovided)
+      (ana/warning :unprovided @env/*compiler* {:unprovided (sort unprovided)}))
+    inputs))
+
+(defn compile-sources
+  "Takes dependency ordered list of IJavaScript compatible maps from parse-ns
+  and compiles them."
+  [inputs compiler-stats opts]
+  (util/measure compiler-stats
+    "Compile sources"
+    (doall
+      (for [ns-info inputs]
+        ; FIXME: compile-file calls parse-ns unnecessarily to get ns-info
+        ; TODO: we could mark dependent namespaces for recompile here
+        (-compile (:source-file ns-info)
+                  ; - ns-info -> ns -> cljs file relpath -> js relpath
+                  (merge opts {:output-file (comp/rename-to-js (util/ns->relpath (:ns ns-info)))}))))))
+
+(defn add-goog-base
+  [inputs]
+  (cons (javascript-file nil (io/resource "goog/base.js") ["goog"] nil)
+        inputs))
+
+(defn add-js-sources
+  "Given list of IJavaScript objects, add foreign-deps and constants-table
+  IJavaScript objects to the list."
+  [inputs opts]
+  (let [requires      (set (mapcat deps/-requires inputs))
+        required-js   (js-dependencies opts requires)]
+    (concat
+      (map
+        (fn [{:keys [foreign url file provides requires] :as js-map}]
+          (let [url (or url (io/resource file))]
+            (merge
+              (javascript-file foreign url provides requires)
+              js-map)))
+        required-js)
+      [(when (-> @env/*compiler* :options :emit-constants)
+         (let [url (deps/to-url (str (util/output-directory opts) "/constants_table.js"))]
+           (javascript-file nil url url ["constants-table"] ["cljs.core"] nil nil)))]
+      inputs)))
 
 (comment
   (comp/find-sources-root "samples/hello/src")
