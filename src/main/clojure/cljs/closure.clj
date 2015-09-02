@@ -1817,6 +1817,108 @@
        :entries '#{cljs.reader hello.core}}}})
   )
 
+(defn build-new
+  "Given a source which can be compiled, produce runnable JavaScript."
+  ([source opts]
+    (build source opts
+      (if-not (nil? env/*compiler*)
+        env/*compiler*
+        (env/default-compiler-env opts))))
+  ([source opts compiler-env]
+     (env/with-compiler-env compiler-env
+       (let [compiler-stats (:compiler-stats opts)
+             all-opts (-> opts
+                          add-implicit-options
+                          process-js-modules)]
+         (check-output-to opts)
+         (check-output-dir opts)
+         (check-source-map opts)
+         (check-source-map-path opts)
+         (check-output-wrapper opts)
+         (check-node-target opts)
+         (swap! compiler-env
+           #(-> %
+             (update-in [:options] merge all-opts)
+             (assoc :target (:target opts))
+             (assoc :js-dependency-index (deps/js-dependency-index all-opts))))
+         (binding [comp/*dependents* (when-not (false? (:recompile-dependents opts))
+                                       (atom {:recompile #{} :visited #{}}))
+                   ana/*cljs-static-fns*
+                   (or (and (= (:optimizations opts) :advanced)
+                            (not (false? (:static-fns opts))))
+                       (:static-fns opts)
+                       ana/*cljs-static-fns*)
+                   *assert* (not= (:elide-asserts opts) true)
+                   ana/*load-tests* (not= (:load-tests opts) false)
+                   ana/*cljs-warnings*
+                   (let [warnings (opts :warnings true)]
+                     (merge
+                       ana/*cljs-warnings*
+                       (if (or (true? warnings)
+                               (false? warnings))
+                         (zipmap
+                           [:unprovided :undeclared-var
+                            :undeclared-ns :undeclared-ns-form]
+                           (repeat warnings))
+                         warnings)))
+                   ana/*verbose* (:verbose opts)]
+           (let [source (if (and (:main all-opts) (#{:advanced :simple} (:optimizations all-opts)))
+                          (:uri (cljs-source-for-namespace (:main all-opts)))
+                          source)
+                 ; START NEW
+                 js-sources (-> source
+                                ; FIXME: Support String, URL, File... Vector, List? (Compilable)
+                                comp/find-root-sources
+                                add-dependency-sources
+                                deps/dependency-order
+                                (compile-sources compiler-stats all-opts)
+                                (add-js-sources all-opts)
+                                (cond-> (= :nodejs (:target all-opts)) (concat [(-compile (io/resource "cljs/nodejs.cljs") all-opts)]))
+                                deps/dependency-order
+                                add-goog-base
+                                (cond-> (= :nodejs (:target all-opts)) (concat [(-compile (io/resource "cljs/nodejscli.cljs") all-opts)])))
+                 ; END NEW
+                 _ (when (:emit-constants all-opts)
+                     (comp/emit-constants-table-to-file
+                       (::ana/constant-table @env/*compiler*)
+                       (str (util/output-directory all-opts) "/constants_table.js")))
+                 optim (:optimizations all-opts)
+                 ret (if (and optim (not= optim :none))
+                       (do
+                         (when-let [fname (:source-map all-opts)]
+                           (assert (or (nil? (:output-to all-opts)) (:modules opts) (string? fname))
+                             (str ":source-map must name a file when using :whitespace, "
+                                  ":simple, or :advanced optimizations with :output-to"))
+                           (doall (map #(source-on-disk all-opts %) js-sources)))
+                         (if (:modules all-opts)
+                           (->>
+                             (apply optimize-modules all-opts js-sources)
+                             (output-modules all-opts js-sources))
+                           (let [fdeps-str (foreign-deps-str all-opts
+                                             (filter foreign-source? js-sources))
+                                 all-opts  (assoc all-opts
+                                             :foreign-deps-line-count
+                                             (- (count (.split #"\r?\n" fdeps-str -1)) 1))]
+                             (->>
+                               (util/measure compiler-stats
+                                 (str "Optimizing " (count js-sources) " sources")
+                                 (apply optimize all-opts
+                                   (remove foreign-source? js-sources)))
+                               (add-wrapper all-opts)
+                               (add-source-map-link all-opts)
+                               (str fdeps-str)
+                               (add-header all-opts)
+                               (output-one-file all-opts)))))
+                       (apply output-unoptimized all-opts js-sources))]
+             ;; emit Node.js bootstrap script for :none & :whitespace optimizations
+             (when (and (= (:target opts) :nodejs)
+                        (not= (:optimizations opts) :whitespace))
+               (let [outfile (io/file (util/output-directory opts)
+                               "goog" "bootstrap" "nodejs.js")]
+                 (util/mkdirs outfile)
+                 (spit outfile (slurp (io/resource "cljs/bootstrap_node.js")))))
+             ret))))))
+
 (defn watch
   "Given a source directory, produce runnable JavaScript. Watch the source
    directory for changes rebuliding when necessary. Takes the same arguments as
