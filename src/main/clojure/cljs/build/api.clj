@@ -218,6 +218,17 @@
    (binding [ana/*cljs-warning-handlers* (:warning-handlers opts ana/*cljs-warning-handlers*)]
      (closure/build source opts compiler-env))))
 
+(defn build-new
+  "Given a source which can be compiled, produce runnable JavaScript."
+  ([source opts]
+   (build-new source opts
+     (if-not (nil? env/*compiler*)
+       env/*compiler*
+       (env/default-compiler-env opts))))
+  ([source opts compiler-env]
+   (binding [ana/*cljs-warning-handlers* (:warning-handlers opts ana/*cljs-warning-handlers*)]
+     (closure/build-new source opts compiler-env))))
+
 (defn watch
   "Given a source which can be compiled, watch it for changes to produce."
   ([source opts]
