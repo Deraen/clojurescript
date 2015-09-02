@@ -14,7 +14,7 @@
 
    Use the 'build' function for end-to-end compilation.
 
-   build = compile -> add-dependencies -> optimize -> output
+   build = find-sources -> add-dependencies -> compile -> optimize -> output
 
    Two protocols are defined: IJavaScript and Compilable. The
    Compilable protocol is satisfied by something which can return one
@@ -1792,17 +1792,15 @@
                  compiled (util/measure compiler-stats
                             "Compile basic sources"
                             (doall (-compile source all-opts)))
-                 js-sources (util/measure compiler-stats
-                              "Add dependencies"
-                              (doall
-                                (concat
-                                  (apply add-dependencies all-opts
-                                    (concat
-                                      (if (sequential? compiled) compiled [compiled])
-                                      (when (= :nodejs (:target all-opts))
-                                        [(-compile (io/resource "cljs/nodejs.cljs") all-opts)])))
-                                  (when (= :nodejs (:target all-opts))
-                                    [(-compile (io/resource "cljs/nodejscli.cljs") all-opts)]))))
+                 js-sources (-> (-find-sources source all-opts)
+                                add-dependency-sources
+                                deps/dependency-order
+                                (compile-sources compiler-stats all-opts)
+                                (add-js-sources all-opts)
+                                (cond-> (= :nodejs (:target all-opts)) (concat [(-compile (io/resource "cljs/nodejs.cljs") all-opts)]))
+                                deps/dependency-order
+                                add-goog-base
+                                (cond-> (= :nodejs (:target all-opts)) (concat [(-compile (io/resource "cljs/nodejscli.cljs") all-opts)])))
                  _ (when (:emit-constants all-opts)
                      (comp/emit-constants-table-to-file
                        (::ana/constant-table @env/*compiler*)
