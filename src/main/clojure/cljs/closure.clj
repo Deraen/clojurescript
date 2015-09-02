@@ -666,16 +666,19 @@
 (defn cljs-dependencies-2
   "Given set of cljs namespace symbols, find IJavaScript objects for the namespaces."
   [requires]
-  ; FIXME: (remove #(or ((@env/*compiler* :js-dependency-index) %) (deps/find-classpath-lib %)))
-  (letfn [(namespaces->uris [namespaces]
-            (->> namespaces (map cljs-source-for-namespace) (keep :uri)))]
-    (loop [required-files (namespaces->uris requires)
+  (letfn [(cljs-deps [namespaces]
+            (->> namespaces
+                 (remove #(or ((@env/*compiler* :js-dependency-index) %)
+                              (deps/find-classpath-lib %)))
+                 (map cljs-source-for-namespace)
+                 (remove (comp nil? :uri))))]
+    (loop [required-files (cljs-deps requires)
            visited (set required-files)
            cljs-namespaces #{}]
       (if (seq required-files)
         (let [next-file (first required-files)
               ns-info (ana/parse-ns next-file)
-              new-req (remove #(contains? visited %) (namespaces->uris (deps/-requires ns-info)))]
+              new-req (remove #(contains? visited %) (cljs-deps (deps/-requires ns-info)))]
           (recur (into (rest required-files) new-req)
                  (into visited new-req)
                  (conj cljs-namespaces ns-info)))
