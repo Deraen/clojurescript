@@ -389,7 +389,8 @@
   (-paths [this] [this]))
 
 (defprotocol Compilable
-  (-compile [this opts] "Returns one or more IJavaScripts."))
+  (-compile [this opts] "Returns one or more IJavaScripts.")
+  (-find-sources [this opts] "Returns one or more IJavascripts, without compiling them."))
 
 (defn compile-form-seq
   "Compile a sequence of forms to a JavaScript source string."
@@ -478,6 +479,10 @@
       (let [file-on-disk (jar-file-to-disk this (util/output-directory opts))]
         (-compile file-on-disk opts))))
 
+(defn find-jar-sources
+  [this opts]
+  [(comp/find-source (jar-file-to-disk this (util/output-directory opts)))])
+
 (extend-protocol Compilable
 
   File
@@ -485,33 +490,48 @@
     (if (.isDirectory this)
       (compile-dir this opts)
       (compile-file this opts)))
+  (-find-sources [this _]
+    (if (.isDirectory this)
+      (comp/find-root-sources this)
+      [(comp/find-source this)]))
 
   URL
   (-compile [this opts]
     (case (.getProtocol this)
       "file" (-compile (io/file this) opts)
       "jar" (compile-from-jar this opts)))
+  (-find-sources [this opts]
+    (case (.getProtocol this)
+      "file" (-find-sources (io/file this) opts)
+      "jar" (find-jar-sources this opts)))
   
   clojure.lang.PersistentList
   (-compile [this opts]
     (compile-form-seq [this]))
+  ; FIXME: -find-sources
   
   String
   (-compile [this opts] (-compile (io/file this) opts))
+  (-find-sources [this opts] (-find-sources (io/file this) opts))
   
   clojure.lang.PersistentVector
   (-compile [this opts] (compile-form-seq this))
+  ; FIXME: -find-sources
   )
 
 (comment
   ;; compile a file in memory
   (-compile "samples/hello/src/hello/core.cljs" {})
+  (-find-sources "samples/hello/src/hello/core.cljs" {})
   ;; compile a file to disk - see file @ 'out/clojure/set.js'
   (-compile (io/resource "clojure/set.cljs") {:output-file "clojure/set.js"})
+  (-find-sources (io/resource "clojure/set.cljs") {:output-file "clojure/set.js"})
   ;; compile a project
   (-compile (io/file "samples/hello/src") {})
+  (-find-sources (io/file "samples/hello/src") {})
   ;; compile a project with a custom output directory
   (-compile (io/file "samples/hello/src") {:output-dir "my-output"})
+  (-find-sources (io/file "samples/hello/src") {:output-dir "my-output"})
   ;; compile a form
   (-compile '(defn plus-one [x] (inc x)) {})
   ;; compile a vector of forms

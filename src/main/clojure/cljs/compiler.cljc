@@ -1389,11 +1389,14 @@
               compiled)))))))
 
 #?(:clj
+   (defn find-source [file]
+     (ana/parse-ns file)))
+
+#?(:clj
    (defn find-root-sources
      [src-dir]
       (let [src-dir-file (io/file src-dir)]
-        (map #(ana/parse-ns %)
-             (cljs-files-in src-dir-file)))))
+        (map find-source (cljs-files-in src-dir-file)))))
 
 ;; TODO: needs fixing, table will include other things than keywords - David
 
