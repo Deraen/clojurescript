@@ -1477,6 +1477,7 @@
 
        :else (str (random-string 5) ".js")))))
 
+#_
 (defn get-js-module-root [js-file]
   (let [path (.getParent (io/file js-file))]
     (cond->> path
@@ -1521,14 +1522,22 @@
   (let [{:keys [file module-type]} ijs
         ^List externs '()
         ^List source-files (get-source-files opts)
-        ^CompilerOptions options (make-convert-js-module-options opts)
+        ^CompilerOptions options (doto (make-convert-js-module-options opts)
+                                   (.setProcessCommonJSModules true)
+                                   (.setTransformAMDToCJSModules (= module-type :amd)))
         closure-compiler (doto (make-closure-compiler)
                            (.init externs source-files options))
-        cjs (ProcessCommonJSModules. closure-compiler true)
         ^Node root (get-root-node ijs closure-compiler)]
-    (when (= module-type :amd)
-      (.process (TransformAMDToCJSModule. closure-compiler) nil root))
-    (.process cjs nil root)
+    ;; Parse will call .process based on given compiler options to all source-files.
+    ;; This means that currently for each foreign-dep file all other foreign-dep files are processed. n^2
+    ;; Solution 1: Set source-files to only the current file (ijs)
+    ;; Problem: moduleLoader will only resolve requires to files in source-files.
+
+    ;; Another problem, get-source-files doesn't include preprocessed source (e.g. jsx) so parsing will fail for such files
+    ;; Preprocessing should be ran for all foreign-dep files before convert-js-module step?
+
+    ;; Idea: Group foreign-dep per module-type and call parse per type?
+    (.parse closure-compiler)
     (report-failure (.getResult closure-compiler))
     (assoc ijs :source (.toSource closure-compiler root))))
 
@@ -1541,9 +1550,8 @@
                                    (.setLanguageOut CompilerOptions$LanguageMode/ECMASCRIPT5))
         closure-compiler (doto (make-closure-compiler)
                            (.init externs source-files options))
-        cjs (ProcessEs6Modules. closure-compiler)
         ^Node root (get-root-node ijs closure-compiler)]
-    (.processFile cjs root)
+    (.parse closure-compiler)
     (report-failure (.getResult closure-compiler))
     (assoc ijs :source (.toSource closure-compiler root))))
 
