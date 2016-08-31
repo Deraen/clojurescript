@@ -1491,21 +1491,16 @@
                                   (CompilerInput.))]
     (.getAstRoot input closure-compiler)))
 
-(defn get-source-files [opts]
-  (->> (:foreign-libs opts)
-       (filter #(let [module-type (:module-type %)]
-                  (or (= module-type :amd)
-                      (= module-type :commonjs)
-                      (= module-type :es6))))
-       (map (fn [lib]
-              (let [lib (deps/load-foreign-library lib)]
-                (js-source-file (:file lib) (deps/-source lib)))))))
+(defn get-source-files [js-modules]
+  (map (fn [lib]
+         (js-source-file (:file lib) (deps/-source lib)))
+       js-modules))
 
 (defmulti convert-js-module
   "Takes a JavaScript module as an IJavaScript and rewrites it into a Google
   Closure-compatible form. Returns an IJavaScript with the converted module
   code set as source."
-  (fn [{module-type :module-type :as ijs} opts]
+  (fn [{module-type :module-type :as ijs} js-modules opts]
     (if (= module-type :amd)
       ;; AMD modules are converted via CommonJS modules
       :commonjs
@@ -1518,10 +1513,10 @@
        :language-in :language-out])
     (set-options (CompilerOptions.))))
 
-(defmethod convert-js-module :commonjs [ijs opts]
+(defmethod convert-js-module :commonjs [ijs js-modules opts]
   (let [{:keys [file module-type]} ijs
         ^List externs '()
-        ^List source-files (get-source-files opts)
+        ^List source-files (get-source-files js-modules)
         ^CompilerOptions options (doto (make-convert-js-module-options opts)
                                    (.setProcessCommonJSModules true)
                                    (.setTransformAMDToCJSModules (= module-type :amd)))
@@ -1541,10 +1536,10 @@
     (report-failure (.getResult closure-compiler))
     (assoc ijs :source (.toSource closure-compiler root))))
 
-(defmethod convert-js-module :es6 [ijs opts]
+(defmethod convert-js-module :es6 [ijs js-modules opts]
   (let [{:keys [file]} ijs
         ^List externs '()
-        ^List source-files (get-source-files opts)
+        ^List source-files (get-source-files js-modules)
         ^CompilerOptions options (doto (make-convert-js-module-options opts)
                                    (.setLanguageIn CompilerOptions$LanguageMode/ECMASCRIPT6)
                                    (.setLanguageOut CompilerOptions$LanguageMode/ECMASCRIPT5))
@@ -1555,7 +1550,7 @@
     (report-failure (.getResult closure-compiler))
     (assoc ijs :source (.toSource closure-compiler root))))
 
-(defmethod convert-js-module :default [ijs opts]
+(defmethod convert-js-module :default [ijs js-modules opts]
   (ana/warning :unsupported-js-module-type @env/*compiler* ijs)
   ijs)
 
@@ -1588,12 +1583,7 @@
       (when (and res (or ana/*verbose* (:verbose opts)))
         (util/debug-prn "Copying" (str res) "to" (str out-file)))
       (util/mkdirs out-file)
-      (spit out-file
-        (cond-> js
-          (map? js) (assoc :source (deps/-source js))
-          (:preprocess js) (js-transforms opts)
-          (:module-type js) (convert-js-module opts)
-          true deps/-source))
+      (spit out-file (deps/-source js))
       (when res
         (.setLastModified ^File out-file (util/last-modified res))))
     (if (map? js)
@@ -1858,21 +1848,44 @@
   namespace to new module namespace to compiler env. Returns modified compiler
   options where new modules are passed with :libs option."
   [opts]
-  (let [js-modules (filter :module-type (:foreign-libs opts))]
-    (reduce (fn [new-opts {:keys [file module-type] :as lib}]
-              (if (or (= module-type :commonjs)
-                      (= module-type :amd)
-                      (= module-type :es6))
-                (let [ijs (write-javascript opts (deps/load-foreign-library lib))
-                      module-name (-> (deps/load-library (:out-file ijs)) first :provides first)]
-                  (doseq [provide (:provides ijs)]
-                    (swap! env/*compiler*
-                      #(update-in % [:js-module-index] assoc provide module-name)))
-                  (-> new-opts
-                      (update-in [:libs] (comp vec conj) (:out-file ijs))
-                      (update-in [:foreign-libs]
-                        (comp vec (fn [libs] (remove #(= (:file %) file) libs))))))
-                new-opts))
+  (let [js-modules (filter :module-type (:foreign-libs opts))
+        ;; Load all modules
+        ;; Add :source so preprocessing and conversion can access it
+        js-modules (map (fn [lib]
+                          (let [js (deps/load-foreign-library lib)
+                                js (assoc js :source (deps/-source js))
+                                js (if (:preprocess js)
+                                     (js-transforms js opts)
+                                     js)]
+                            js))
+                        js-modules)
+        ;; Convert all-modules
+        ;; Conversion needs list of all other modules for processing relations
+        ;; FIXME: Doesn't rewrite require -> goog.require??
+        js-modules (map (fn [ijs]
+                          (convert-js-module ijs js-modules opts))
+                        js-modules)]
+
+    ;; TODO:
+    ;; 1. convert all amdjs to commonjs
+    ;; 2. convert all commonjs (including from previous step)
+    ;; etc. other conversions
+    ;; amd processing doesn't use module loader
+    ;; commonjs modules can see (and require) each other (including from amd)
+    ;; same for other types
+
+    ;; Write modules to disk, update compiler state and build new options
+    (reduce (fn [new-opts {:keys [file] :as ijs}]
+              (let [ijs (write-javascript opts ijs)
+                    module-name (-> (deps/load-library (:out-file ijs)) first :provides first)]
+                (doseq [provide (:provides ijs)]
+                  (println provide module-name)
+                  (swap! env/*compiler*
+                    #(update-in % [:js-module-index] assoc provide module-name)))
+                (-> new-opts
+                    (update-in [:libs] (comp vec conj) (:out-file ijs))
+                    (update-in [:foreign-libs]
+                      (comp vec (fn [libs] (remove #(= (:file %) file) libs)))))))
             opts js-modules)))
 
 (defn build
@@ -1888,6 +1901,7 @@
              all-opts (-> opts
                           add-implicit-options
                           process-js-modules)]
+         (println all-opts)
          (check-output-to opts)
          (check-output-dir opts)
          (check-source-map opts)
