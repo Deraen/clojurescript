@@ -1514,7 +1514,7 @@
     (set-options (CompilerOptions.))))
 
 (defmethod convert-js-module :commonjs [ijs js-modules opts]
-  (let [{:keys [file module-type]} ijs
+  (let [{:keys [module-type]} ijs
         ^List externs '()
         ^List source-files (get-source-files js-modules)
         ^CompilerOptions options (doto (make-convert-js-module-options opts)
@@ -1523,22 +1523,14 @@
         closure-compiler (doto (make-closure-compiler)
                            (.init externs source-files options))
         ^Node root (get-root-node ijs closure-compiler)]
-    ;; Parse will call .process based on given compiler options to all source-files.
-    ;; This means that currently for each foreign-dep file all other foreign-dep files are processed. n^2
-    ;; Solution 1: Set source-files to only the current file (ijs)
-    ;; Problem: moduleLoader will only resolve requires to files in source-files.
-
-    ;; Another problem, get-source-files doesn't include preprocessed source (e.g. jsx) so parsing will fail for such files
-    ;; Preprocessing should be ran for all foreign-dep files before convert-js-module step?
-
     ;; Idea: Group foreign-dep per module-type and call parse per type?
     (.parse closure-compiler)
     (report-failure (.getResult closure-compiler))
+    ;; Problem: returns unprocessed source?
     (assoc ijs :source (.toSource closure-compiler root))))
 
 (defmethod convert-js-module :es6 [ijs js-modules opts]
-  (let [{:keys [file]} ijs
-        ^List externs '()
+  (let [^List externs '()
         ^List source-files (get-source-files js-modules)
         ^CompilerOptions options (doto (make-convert-js-module-options opts)
                                    (.setLanguageIn CompilerOptions$LanguageMode/ECMASCRIPT6)
@@ -1879,7 +1871,6 @@
               (let [ijs (write-javascript opts ijs)
                     module-name (-> (deps/load-library (:out-file ijs)) first :provides first)]
                 (doseq [provide (:provides ijs)]
-                  (println provide module-name)
                   (swap! env/*compiler*
                     #(update-in % [:js-module-index] assoc provide module-name)))
                 (-> new-opts
