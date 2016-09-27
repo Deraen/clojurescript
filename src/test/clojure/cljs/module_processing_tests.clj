@@ -21,6 +21,15 @@
 (def cenv (env/default-compiler-env))
 
 (deftest commonjs-module-processing
+  ;; Processed files are only copied/written if input has changed
+  ;; In test case it makes sense to write files always, in case the processing logic has changed.
+  (doseq [f (file-seq (io/file "out"))
+          :when (.isFile f)]
+    (.delete f))
+
+  ;; Reset load-library cache so that changes to processed files are noticed
+  (alter-var-root #'cljs.js-deps/load-library (constantly (memoize cljs.js-deps/load-library*)))
+
   (is (= {:foreign-libs []
           :libs ["out/react.js"
                  "out/Circle.js"]
@@ -37,13 +46,7 @@
               :closure-warnings {:non-standard-jsdoc :off}})))
       "processed modules are added to :libs")
 
-  (testing "processed modules have goog.provide calls"
-    (is (.contains "goog.provide" (with-open [r (io/reader "out/react.js")]
-                                    (first (line-seq r)))))
-    (is (.contains "goog.provide" (with-open [r (io/reader "out/Circle.js")]
-                                    (first (line-seq r))))))
-
-  (is (= {"React" "modules$out$react"
-          "Circle" "modules$out$Circle"}
+  (is (= {"React" "module$src$test$cljs$react"
+          "Circle" "module$src$test$cljs$Circle"}
          (:js-module-index @cenv))
       "Processed modules are added to :js-module-index"))

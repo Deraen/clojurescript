@@ -1485,6 +1485,7 @@
       (not (.startsWith path (str "." File/separator))) (str "." File/separator)
       (not (.endsWith path File/separator)) (#(str % File/separator)))))
 
+#_
 (defn ^Node get-root-node [ijs closure-compiler]
   (let [^CompilerInput input (->> (deps/-source ijs)
                                   (js-source-file (:file ijs))
@@ -1521,13 +1522,15 @@
                                    (.setProcessCommonJSModules true)
                                    (.setTransformAMDToCJSModules (= module-type :amd)))
         closure-compiler (doto (make-closure-compiler)
-                           (.init externs source-files options))
-        ^Node root (get-root-node ijs closure-compiler)]
+                           (.init externs source-files options))]
     ;; Idea: Group foreign-dep per module-type and call parse per type?
     (.parse closure-compiler)
-    (report-failure (.getResult closure-compiler))
-    ;; Problem: returns unprocessed source?
-    (assoc ijs :source (.toSource closure-compiler root))))
+    (let [;; compiler root has two childs, externRoot and jsRoot
+          js-root (.getSecondChild (.getRoot closure-compiler))
+          ;; select root matching the ijs file
+          ^Node ijs-root (first (filter #(= (:file ijs) (.getSourceFileName %)) (.children js-root)))]
+      (report-failure (.getResult closure-compiler))
+      (assoc ijs :source (.toSource closure-compiler ijs-root)))))
 
 (defmethod convert-js-module :es6 [ijs js-modules opts]
   (let [^List externs '()
@@ -1536,11 +1539,12 @@
                                    (.setLanguageIn CompilerOptions$LanguageMode/ECMASCRIPT6)
                                    (.setLanguageOut CompilerOptions$LanguageMode/ECMASCRIPT5))
         closure-compiler (doto (make-closure-compiler)
-                           (.init externs source-files options))
-        ^Node root (get-root-node ijs closure-compiler)]
+                           (.init externs source-files options))]
     (.parse closure-compiler)
-    (report-failure (.getResult closure-compiler))
-    (assoc ijs :source (.toSource closure-compiler root))))
+    (let [js-root (.getSecondChild (.getRoot closure-compiler))
+          ^Node ijs-root (first (filter #(= (:file ijs) (.getSourceFileName %)) (.children js-root)))]
+      (report-failure (.getResult closure-compiler))
+      (assoc ijs :source (.toSource closure-compiler ijs-root)))))
 
 (defmethod convert-js-module :default [ijs js-modules opts]
   (ana/warning :unsupported-js-module-type @env/*compiler* ijs)
@@ -1853,18 +1857,11 @@
                         js-modules)
         ;; Convert all-modules
         ;; Conversion needs list of all other modules for processing relations
-        ;; FIXME: Doesn't rewrite require -> goog.require??
+        ;; FIXME: Should call closure-compiler parse ONCE per module-type, because all CommonJS modules need to
+        ;; be processed on one go, so compiler can handle requires between them.
         js-modules (map (fn [ijs]
                           (convert-js-module ijs js-modules opts))
                         js-modules)]
-
-    ;; TODO:
-    ;; 1. convert all amdjs to commonjs
-    ;; 2. convert all commonjs (including from previous step)
-    ;; etc. other conversions
-    ;; amd processing doesn't use module loader
-    ;; commonjs modules can see (and require) each other (including from amd)
-    ;; same for other types
 
     ;; Write modules to disk, update compiler state and build new options
     (reduce (fn [new-opts {:keys [file] :as ijs}]
