@@ -1477,31 +1477,16 @@
 
        :else (str (random-string 5) ".js")))))
 
-#_
-(defn get-js-module-root [js-file]
-  (let [path (.getParent (io/file js-file))]
-    (cond->> path
-      (.startsWith path File/separator) (str ".")
-      (not (.startsWith path (str "." File/separator))) (str "." File/separator)
-      (not (.endsWith path File/separator)) (#(str % File/separator)))))
-
-#_
-(defn ^Node get-root-node [ijs closure-compiler]
-  (let [^CompilerInput input (->> (deps/-source ijs)
-                                  (js-source-file (:file ijs))
-                                  (CompilerInput.))]
-    (.getAstRoot input closure-compiler)))
-
 (defn get-source-files [js-modules]
   (map (fn [lib]
          (js-source-file (:file lib) (deps/-source lib)))
        js-modules))
 
-(defmulti convert-js-module
-  "Takes a JavaScript module as an IJavaScript and rewrites it into a Google
-  Closure-compatible form. Returns an IJavaScript with the converted module
+(defmulti convert-js-modules
+  "Takes a list JavaScript modules as an IJavaScript and rewrites them into a Google
+  Closure-compatible form. Returns list IJavaScript with the converted module
   code set as source."
-  (fn [{module-type :module-type :as ijs} js-modules opts]
+  (fn [module-type js-modules opts]
     (if (= module-type :amd)
       ;; AMD modules are converted via CommonJS modules
       :commonjs
@@ -1514,9 +1499,8 @@
        :language-in :language-out])
     (set-options (CompilerOptions.))))
 
-(defmethod convert-js-module :commonjs [ijs js-modules opts]
-  (let [{:keys [module-type]} ijs
-        ^List externs '()
+(defmethod convert-js-modules :commonjs [module-type js-modules opts]
+  (let [^List externs '()
         ^List source-files (get-source-files js-modules)
         ^CompilerOptions options (doto (make-convert-js-module-options opts)
                                    (.setProcessCommonJSModules true)
@@ -1528,11 +1512,14 @@
     (let [;; compiler root has two childs, externRoot and jsRoot
           js-root (.getSecondChild (.getRoot closure-compiler))
           ;; select root matching the ijs file
-          ^Node ijs-root (first (filter #(= (:file ijs) (.getSourceFileName %)) (.children js-root)))]
+          ;; source file => root
+          result-roots (into {} (map (juxt #(.getSourceFileName ^Node %) identity) (.children js-root)))]
       (report-failure (.getResult closure-compiler))
-      (assoc ijs :source (.toSource closure-compiler ijs-root)))))
+      (map (fn [{:keys [file] :as ijs}]
+             (assoc ijs :source (.toSource closure-compiler ^Node (get result-roots file))))
+           js-modules))))
 
-(defmethod convert-js-module :es6 [ijs js-modules opts]
+(defmethod convert-js-modules :es6 [module-type js-modules opts]
   (let [^List externs '()
         ^List source-files (get-source-files js-modules)
         ^CompilerOptions options (doto (make-convert-js-module-options opts)
@@ -1542,13 +1529,16 @@
                            (.init externs source-files options))]
     (.parse closure-compiler)
     (let [js-root (.getSecondChild (.getRoot closure-compiler))
-          ^Node ijs-root (first (filter #(= (:file ijs) (.getSourceFileName %)) (.children js-root)))]
+          result-roots (into {} (map (juxt #(.getSourceFileName ^Node %) identity) (.children js-root)))]
       (report-failure (.getResult closure-compiler))
-      (assoc ijs :source (.toSource closure-compiler ijs-root)))))
+      (map (fn [{:keys [file] :as ijs}]
+             (assoc ijs :source (.toSource closure-compiler ^Node (get result-roots file))))
+           js-modules))))
 
-(defmethod convert-js-module :default [ijs js-modules opts]
-  (ana/warning :unsupported-js-module-type @env/*compiler* ijs)
-  ijs)
+(defmethod convert-js-module :default [module-type js-modules opts]
+  ;; FIXME: Warning needs currently file information
+  (ana/warning :unsupported-js-module-type @env/*compiler* {:module-type module-type :file nil})
+  js-modules)
 
 (defmulti js-transforms
   "Takes an IJavaScript with the source code set as source, transforms the
@@ -1855,13 +1845,12 @@
                                      js)]
                             js))
                         js-modules)
-        ;; Convert all-modules
-        ;; Conversion needs list of all other modules for processing relations
-        ;; FIXME: Should call closure-compiler parse ONCE per module-type, because all CommonJS modules need to
-        ;; be processed on one go, so compiler can handle requires between them.
-        js-modules (map (fn [ijs]
-                          (convert-js-module ijs js-modules opts))
-                        js-modules)]
+        ;; Conversion is done per module-type, because Compiler needs to process e.g. all CommonJS
+        ;; modules on one go, so it can handle the dependencies between modules.
+        modules-per-type (group-by :module-type js-modules)
+        js-modules (mapcat (fn [[module-type js-modules]]
+                             (convert-js-modules module-type js-modules opts))
+                           modules-per-type)]
 
     ;; Write modules to disk, update compiler state and build new options
     (reduce (fn [new-opts {:keys [file] :as ijs}]
