@@ -1,6 +1,5 @@
 (ns cljs.module-processing-tests
-  (:require [cljs.build.api :as b]
-            [clojure.java.io :as io]
+  (:require [clojure.java.io :as io]
             [cljs.closure :as closure]
             [clojure.test :refer :all]
             [cljs.env :as env]))
@@ -47,4 +46,4 @@
   (is (= {"React" "modules$out$react"
           "Circle" "modules$out$Circle"}
          (:js-module-index @cenv))
-      ""))
+      "Processed modules are added to :js-module-index"))
