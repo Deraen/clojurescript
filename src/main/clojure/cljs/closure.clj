@@ -1498,6 +1498,18 @@
        :language-in :language-out])
     (set-options (CompilerOptions.))))
 
+(defn get-js-root [closure-compiler]
+  (.getSecondChild (.getRoot closure-compiler)))
+
+(defn get-closure-sources
+  "Gets map of source file name -> Node, for files in Closure Compiler js root."
+  [closure-compiler]
+  (let [source-nodes (.children (get-js-root closure-compiler))]
+    (into {} (map (juxt #(.getSourceFileName ^Node %) identity) source-nodes))))
+
+(defn add-converted-source [closure-compiler result-nodes {:keys [file] :as ijs}]
+  (assoc ijs :source (.toSource closure-compiler ^Node (get result-nodes file))))
+
 (defmethod convert-js-modules :commonjs [module-type js-modules opts]
   (let [^List externs '()
         ;; FIXME: Should this contain other module types also?
@@ -1510,16 +1522,8 @@
         closure-compiler (doto (make-closure-compiler)
                            (.init externs source-files options))]
     (.parse closure-compiler)
-    (let [;; compiler root has two childs, externRoot and jsRoot
-          js-root (.getSecondChild (.getRoot closure-compiler))
-          ;; select root matching the ijs file
-          ;; source file => root
-          ;; FIXME: Should move this to a function as this is same as used by :es6
-          result-roots (into {} (map (juxt #(.getSourceFileName ^Node %) identity) (.children js-root)))]
-      (report-failure (.getResult closure-compiler))
-      (map (fn [{:keys [file] :as ijs}]
-             (assoc ijs :source (.toSource closure-compiler ^Node (get result-roots file))))
-           js-modules))))
+    (report-failure (.getResult closure-compiler))
+    (map (partial add-converted-source closure-compiler (get-closure-sources closure-compiler)) js-modules)))
 
 (defmethod convert-js-modules :es6 [module-type js-modules opts]
   (let [^List externs '()
@@ -1530,16 +1534,11 @@
         closure-compiler (doto (make-closure-compiler)
                            (.init externs source-files options))]
     (.parse closure-compiler)
-    (let [js-root (.getSecondChild (.getRoot closure-compiler))
-          result-roots (into {} (map (juxt #(.getSourceFileName ^Node %) identity) (.children js-root)))]
-      (report-failure (.getResult closure-compiler))
-      (map (fn [{:keys [file] :as ijs}]
-             (assoc ijs :source (.toSource closure-compiler ^Node (get result-roots file))))
-           js-modules))))
+    (report-failure (.getResult closure-compiler))
+    (map (partial add-converted-source closure-compiler (get-closure-sources closure-compiler)) js-modules)))
 
 (defmethod convert-js-modules :default [module-type js-modules opts]
-  ;; FIXME: Warning needs currently file information
-  (ana/warning :unsupported-js-module-type @env/*compiler* {:module-type module-type :file nil})
+  (ana/warning :unsupported-js-module-type @env/*compiler* (first js-modules))
   js-modules)
 
 (defmulti js-transforms
