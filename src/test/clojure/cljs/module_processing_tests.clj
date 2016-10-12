@@ -31,6 +31,7 @@
   (alter-var-root #'cljs.js-deps/load-library (constantly (memoize cljs.js-deps/load-library*)))
 
   (is (= {:foreign-libs []
+          :ups-foreign-libs []
           :libs ["out/react.js"
                  "out/Circle.js"]
           :closure-warnings {:non-standard-jsdoc :off}}
