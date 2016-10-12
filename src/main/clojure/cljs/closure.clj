@@ -1835,39 +1835,43 @@
   (let [;; Modules from both :foreign-libs (compiler options) and :ups-foreign-libs (deps.cljs)
         ;; are processed together, so that files from both sources can depend on each other.
         ;; e.g. commonjs module in :foreign-libs can depend on commonjs module from :ups-foreign-libs.
-        js-modules (filter :module-type (concat (:foreign-libs opts) (:ups-foreign-libs opts)))
-        ;; Load all modules - add :source so preprocessing and conversion can access it
-        js-modules (map (fn [lib]
-                          (let [js (deps/load-foreign-library lib)]
-                            (assoc js :source (deps/-source js))))
-                        js-modules)
-        js-modules (map (fn [js]
-                          (if (:preprocess js)
-                            (js-transforms js opts)
-                            js))
-                        js-modules)
-        ;; Conversion is done per module-type, because Compiler needs to process e.g. all CommonJS
-        ;; modules on one go, so it can handle the dependencies between modules.
-        ;; Amdjs modules are converted separate from CommonJS modules so they can't
-        ;; depend on each other.
-        modules-per-type (group-by :module-type js-modules)
-        js-modules (mapcat (fn [[module-type js-modules]]
-                             (convert-js-modules module-type js-modules opts))
-                           modules-per-type)]
+        js-modules (filter :module-type (concat (:foreign-libs opts) (:ups-foreign-libs opts)))]
+    (if (seq js-modules)
+      (util/measure
+        "Process JS modules"
+        (let [;; Load all modules - add :source so preprocessing and conversion can access it
+              js-modules (map (fn [lib]
+                                (let [js (deps/load-foreign-library lib)]
+                                  (assoc js :source (deps/-source js))))
+                              js-modules)
+              js-modules (map (fn [js]
+                                (if (:preprocess js)
+                                  (js-transforms js opts)
+                                  js))
+                              js-modules)
+              ;; Conversion is done per module-type, because Compiler needs to process e.g. all CommonJS
+              ;; modules on one go, so it can handle the dependencies between modules.
+              ;; Amdjs modules are converted separate from CommonJS modules so they can't
+              ;; depend on each other.
+              modules-per-type (group-by :module-type js-modules)
+              js-modules (mapcat (fn [[module-type js-modules]]
+                                   (convert-js-modules module-type js-modules opts))
+                                 modules-per-type)]
 
-    ;; Write modules to disk, update compiler state and build new options
-    (reduce (fn [new-opts {:keys [file] :as ijs}]
-              (let [ijs (write-javascript opts ijs)
-                    module-name (-> (deps/load-library (:out-file ijs)) first :provides first)]
-                (doseq [provide (:provides ijs)]
-                  (swap! env/*compiler*
-                    #(update-in % [:js-module-index] assoc provide module-name)))
-                (-> new-opts
-                    (update-in [:libs] (comp vec conj) (:out-file ijs))
-                    ;; js-module might be defined in either, so update both
-                    (update-in [:foreign-libs] (comp vec (fn [libs] (remove #(= (:file %) file) libs))))
-                    (update-in [:ups-foreign-libs] (comp vec (fn [libs] (remove #(= (:file %) file) libs)))))))
-            opts js-modules)))
+          ;; Write modules to disk, update compiler state and build new options
+          (reduce (fn [new-opts {:keys [file] :as ijs}]
+                    (let [ijs (write-javascript opts ijs)
+                          module-name (-> (deps/load-library (:out-file ijs)) first :provides first)]
+                      (doseq [provide (:provides ijs)]
+                        (swap! env/*compiler*
+                               #(update-in % [:js-module-index] assoc provide module-name)))
+                      (-> new-opts
+                          (update-in [:libs] (comp vec conj) (:out-file ijs))
+                          ;; js-module might be defined in either, so update both
+                          (update-in [:foreign-libs] (comp vec (fn [libs] (remove #(= (:file %) file) libs))))
+                          (update-in [:ups-foreign-libs] (comp vec (fn [libs] (remove #(= (:file %) file) libs)))))))
+                  opts js-modules)))
+      opts)))
 
 (defn build
   "Given a source which can be compiled, produce runnable JavaScript."
