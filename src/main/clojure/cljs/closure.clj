@@ -1512,9 +1512,6 @@
 
 (defmethod convert-js-modules :commonjs [module-type js-modules opts]
   (let [^List externs '()
-        ;; FIXME: Should this contain other module types also?
-        ;; And both from foreign-libs and ups-foreign-libs (cljs-1682)?
-        ;; But probably other module-types can't be parsed by this compiler?
         ^List source-files (get-source-files js-modules)
         ^CompilerOptions options (doto (make-convert-js-module-options opts)
                                    (.setProcessCommonJSModules true)
@@ -1832,22 +1829,30 @@
         (not (false? (:static-fns opts))) (assoc :static-fns true)
         (not (false? (:optimize-constants opts))) (assoc :optimize-constants true)))))
 
-(defn- process-js-modules*
-  [opts k]
-  (let [js-modules (filter :module-type (k opts))
-        ;; Load all modules
-        ;; Add :source so preprocessing and conversion can access it
+(defn process-js-modules
+  "Given the current compiler options, converts JavaScript modules to Google
+  Closure modules and writes them to disk. Adds mapping from original module
+  namespace to new module namespace to compiler env. Returns modified compiler
+  options where new modules are passed with :libs option."
+  [opts]
+  (let [;; Modules from both :foreign-libs (compiler options) and :ups-foreign-libs (deps.cljs)
+        ;; are processed together, so that files from both sources can depend on each other.
+        ;; e.g. commonjs module in :foreign-libs can depend on commonjs module from :ups-foreign-libs.
+        js-modules (filter :module-type (concat (:foreign-libs opts) (:ups-foreign-libs opts)))
+        ;; Load all modules - add :source so preprocessing and conversion can access it
         js-modules (map (fn [lib]
-                          (let [js (deps/load-foreign-library lib)
-                                js (assoc js :source (deps/-source js))
-                                js (if (:preprocess js)
-                                     (js-transforms js opts)
-                                     js)]
+                          (let [js (deps/load-foreign-library lib)]
+                            (assoc js :source (deps/-source js))))
+                        js-modules)
+        js-modules (map (fn [js]
+                          (if (:preprocess js)
+                            (js-transforms js opts)
                             js))
                         js-modules)
         ;; Conversion is done per module-type, because Compiler needs to process e.g. all CommonJS
         ;; modules on one go, so it can handle the dependencies between modules.
-        ;; FIXME: amd type should be grouped with commonjs.
+        ;; Amdjs modules are converted separate from CommonJS modules so they can't
+        ;; depend on each other.
         modules-per-type (group-by :module-type js-modules)
         js-modules (mapcat (fn [[module-type js-modules]]
                              (convert-js-modules module-type js-modules opts))
@@ -1862,21 +1867,10 @@
                     #(update-in % [:js-module-index] assoc provide module-name)))
                 (-> new-opts
                     (update-in [:libs] (comp vec conj) (:out-file ijs))
-                    (update-in [k]
-                      (comp vec (fn [libs] (remove #(= (:file %) file) libs)))))))
+                    ;; js-module might be defined in either, so update both
+                    (update-in [:foreign-libs] (comp vec (fn [libs] (remove #(= (:file %) file) libs))))
+                    (update-in [:ups-foreign-libs] (comp vec (fn [libs] (remove #(= (:file %) file) libs)))))))
             opts js-modules)))
-
-(defn process-js-modules
-  "Given the current compiler options, converts JavaScript modules to Google
-  Closure modules and writes them to disk. Adds mapping from original module
-  namespace to new module namespace to compiler env. Returns modified compiler
-  options where new modules are passed with :libs option."
-  [opts]
-  ;; FIXME: Probably both should be processed at once go, so that same type modules from both sources
-  ;; can depend on each other.
-  (-> opts
-      (process-js-modules* :foreign-libs)
-      (process-js-modules* :ups-foreign-libs)))
 
 (defn build
   "Given a source which can be compiled, produce runnable JavaScript."
