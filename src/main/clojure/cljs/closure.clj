@@ -2235,6 +2235,28 @@
 (defn load-data-readers! [compiler]
   (swap! compiler update-in [:cljs.analyzer/data-readers] merge (get-data-readers)))
 
+(defn get-js-transforms*
+  "returns a merged map containing all data readers defined by libraries
+   on the classpath."
+  ([]
+   (get-js-transforms* (. (Thread/currentThread) (getContextClassLoader))))
+  ([classloader]
+   (enumeration-seq (. classloader (getResources "js_transform.clj")))))
+
+(def get-js-transforms (memoize get-js-transforms*))
+
+(defn load-js-transforms!
+  "Loads found js_transform.clj files.
+  The code for each file is loaded into a namespace named sha of the URL of
+  the file."
+  []
+  (doseq [url (get-js-transforms*)
+          :let [ns-name (str "js_transform_" (util/content-sha (str url)))]]
+    (with-open [rdr (io/reader url)]
+      (binding [*ns* (create-ns (symbol ns-name))]
+        (clojure.core/refer 'clojure.core)
+        (load-reader rdr)))))
+
 (defn add-externs-sources [opts]
   (cond-> opts
     (:infer-externs opts)
@@ -2308,6 +2330,7 @@
                                 (assoc all-opts :output-file (:output-to all-opts))
                                 all-opts)
                  _ (load-data-readers! compiler-env)
+                 _ (load-js-transforms!)
                  js-sources (-> (-find-sources source all-opts)
                                 (add-dependency-sources compile-opts)
                                 deps/dependency-order
