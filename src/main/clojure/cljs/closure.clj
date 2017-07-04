@@ -1626,8 +1626,22 @@
     (:preprocess ijs)))
 
 (defmethod js-transforms :default [ijs opts]
-  (ana/warning :unsupported-preprocess-value @env/*compiler* ijs)
-  ijs)
+  ;; If preprocess key is namespaced keyword,
+  ;; and namespace pointed by the keyword namespace can
+  ;; be required, try to run js-transforms again.
+  ;; ::js-transform-required prevents this being called repeatedly,
+  ;; if the ns doesn't provide the needed method.
+  (if (and (not (::js-transform-required opts))
+           (keyword (:preprocess ijs))
+           (namespace (:preprocess ijs))
+           (try
+             (require (symbol (namespace (:preprocess ijs))))
+             true
+             (catch Exception _
+               false)))
+    (js-transforms ijs (assoc opts ::js-transform-required true))
+    (do (ana/warning :unsupported-preprocess-value @env/*compiler* ijs)
+        ijs)))
 
 (defn write-javascript
   "Write or copy a JavaScript file to output directory. Only write if the file
