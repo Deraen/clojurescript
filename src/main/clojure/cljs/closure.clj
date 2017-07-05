@@ -2153,6 +2153,35 @@
          (node-inputs [{:file (.getAbsolutePath deps-file)}] opts))
        []))))
 
+(defn preprocess-js [{:keys [preprocess] :as js-module} opts]
+  (cond
+    (nil? preprocess) js-module
+
+    ;; Legacy multimethod
+    (keyword? preprocess) (js-transforms js-module opts)
+
+    ;; New, symbol -> function
+    (symbol? preprocess)
+    (let [preprocess-ns (symbol (namespace preprocess))]
+
+      (when (not (find-ns preprocess-ns))
+        (try
+          (locking ana/load-mutex
+            (require preprocess-ns))
+          (catch Throwable t
+            (throw (ex-info "Preprocess namespace could not be loaded" (dissoc js-module :source) t)))))
+
+      (if-let [preprocess-fn (find-var preprocess)]
+        (preprocess-fn js-module opts)
+        (do
+          (ana/warning :unsupported-preprocess-value @env/*compiler* js-module)
+          js-module)))
+
+    :else
+    (do
+      (ana/warning :unsupported-preprocess-value @env/*compiler* js-module)
+      js-module)))
+
 (defn process-js-modules
   "Given the current compiler options, converts JavaScript modules to Google
   Closure modules and writes them to disk. Adds mapping from original module
@@ -2171,11 +2200,7 @@
                                 (let [js (deps/load-foreign-library lib)]
                                   (assoc js :source (deps/-source js))))
                               js-modules)
-              js-modules (map (fn [js]
-                                (if (:preprocess js)
-                                  (js-transforms js opts)
-                                  js))
-                              js-modules)
+              js-modules (map #(preprocess-js % opts) js-modules)
               ;; Conversion is done per module-type, because Compiler needs to process e.g. all CommonJS
               ;; modules on one go, so it can handle the dependencies between modules.
               ;; Amdjs modules are converted separate from CommonJS modules so they can't
