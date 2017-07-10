@@ -249,6 +249,41 @@
   (.delete (io/file "package.json"))
   (delete-node-modules))
 
+(deftest test-string-foreign-libs
+  (let [cenv (env/default-compiler-env)
+        out (.getPath (io/file (test/tmp-dir) "string-foreign-libs-test-out"))
+        {:keys [inputs opts]} {:inputs (str (io/file "src" "test" "cljs_build"))
+                               :opts {:main 'npm-deps-test.string-requires
+                                      :output-dir out
+                                      :optimizations :none
+                                      :foreign-libs [{:file "src/test/string_foreign_libs/react.js"
+                                                      :provides ["react"]
+                                                      :js-global "React"}
+                                                     {:file "src/test/string_foreign_libs/react-dom.js"
+                                                      :requires ["react"]
+                                                      :provides ["react-dom"]
+                                                      :js-global "ReactDOM"}
+                                                     {:file "src/test/string_foreign_libs/react-dom-server.js"
+                                                      :requires ["react"]
+                                                      :provides ["react-dom/server"]
+                                                      :js-global "ReactDOMServer"}
+                                                     {:file "src/test/string_foreign_libs/lodash.js"
+                                                      :js-global "_"
+                                                      :provides ["lodash/array"]}]}}]
+    (testing "mix of symbol & string-based requires"
+      (test/delete-out-files out)
+      (build/build (build/inputs (io/file inputs "npm_deps_test/string_requires.cljs")) opts cenv)
+      (is (.exists (io/file out "src/test/string_foreign_libs/react.js")))
+      (is (.exists (io/file out "globalmodules/src/test/string_foreign_libs/react.js")))
+      (is (contains? (:js-module-index @cenv) "react"))
+      (is (contains? (:js-module-index @cenv) "react-dom/server"))
+      ; (is (not (nil? (re-find #"\.\./node_modules/react-dom/server\.js" (slurp (io/file out "cljs_deps.js"))))))
+      (is (not (nil? (re-find #"globalmodule\$react = window\.React;" (slurp (io/file out "globalmodules/src/test/string_foreign_libs/react.js"))))))
+      (is (not (nil? (re-find #"globalmodule\$react\$dom\$server\.renderToString" (slurp (io/file out "npm_deps_test/string_requires.js"))))))
+      ; (test/delete-out-files out)
+      ))
+  (delete-node-modules))
+
 (deftest test-preloads
   (let [out (.getPath (io/file (test/tmp-dir) "preloads-test-out"))
         {:keys [inputs opts]} {:inputs (str (io/file "src" "test" "cljs"))

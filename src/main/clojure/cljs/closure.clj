@@ -393,7 +393,8 @@
                                             (:url-min this))]
                         [url-min (:file-min this)]
                         [(:url this) (:file this)])]
-       (or url (deps/to-url file)))))
+       (or url (if file
+                 (deps/to-url file))))))
   (-relative-path
     ([this] (deps/-relative-path this nil))
     ([this opts]
@@ -666,6 +667,12 @@
     (if (seq requires)
       (let [node (or (get (@env/*compiler* :js-dependency-index) (first requires))
                      (deps/find-classpath-lib (first requires)))
+            ;; FIXME:
+            node (if (and node
+                          (.startsWith (first (:provides node)) "globalmodule$")
+                          (not (.endsWith (first (:provides node)) "$real")))
+                   (update node :requires #(into [(str (first (:provides node)) "$real")] %))
+                   node)
             new-req (remove #(contains? visited %) (:requires node))]
         (recur (into (rest requires) new-req)
                (into visited new-req)
@@ -2288,6 +2295,44 @@
                   opts js-modules)))
       opts)))
 
+(defn process-global-js-modules
+  [opts]
+  (let [js-modules (filter :js-global (concat (:foreign-libs opts) (:ups-foreign-libs opts)))]
+    (if (seq js-modules)
+      (reduce (fn [new-opts {:keys [file file-min js-global requires provides] :as ijs}]
+                (let [m #(str "globalmodule$" (string/replace % #"[/-]" "\\$"))
+                      module-name (m (first provides))
+                      ijs (write-javascript opts {:foreign true
+                                                  :file (str "globalmodules/" file)
+                                                  :file-min (str "globalmodules/" file-min)
+                                                  :source (format (str "goog.provide(\"%s\");\n"
+                                                                       "%s"
+                                                                       "%s = window.%s;\n")
+                                                                  module-name
+                                                                  (apply str (map (fn [r]
+                                                                                    (format "goog.require(\"%s\");\n" r))
+                                                                                  (map m requires)))
+                                                                  module-name
+                                                                  js-global)})]
+                  (doseq [provide provides]
+                    (swap! env/*compiler* #(update-in % [:js-module-index] assoc provide module-name)))
+                  (-> new-opts
+                      (update-in [:libs] (comp vec conj) (:out-file ijs))
+                      ;; js-module might be defined in either, so update both
+                      ;; multiple :foreign-lib might have same :file - check :provides instead
+                      (update-in [:foreign-libs] (comp vec (fn [libs] (map #(if (= (:provides %) provides)
+                                                                              (update % :provides conj (str (m (first provides)) "$real") ) %)
+                                                                           libs))))
+                      (update-in [:ups-foreign-libs] (comp vec (fn [libs] (map #(if (= (:provides %) provides)
+                                                                                  (update % :provides conj (str (m (first provides)) "$real") ) %)
+                                                                               libs))))
+                      )))
+              opts
+              js-modules)
+      opts)))
+
+
+
 (defn- load-data-reader-file [mappings ^java.net.URL url]
   (with-open [rdr (readers/input-stream-push-back-reader (.openStream url))]
     (binding [*file* (.getFile url)]
@@ -2343,13 +2388,21 @@
                                    (map :missing-js-modules)
                                    cat)
                                  js-sources)
+        ;; Non NPM js deps
+        dep-index (deps/js-dependency-index opts)
+        module-exists? (fn [m]
+                         (contains?
+                           (into #{} (mapcat identity) dep-index)
+                           (str m)))
+        missing-js-modules (remove module-exists? missing-js-modules)
         opts (-> opts
                  (update :foreign-libs
                          (fn [libs]
                            (into (index-node-modules
                                    (into missing-js-modules (keys npm-deps)) opts)
                                  (expand-libs libs))))
-                 process-js-modules)]
+                 process-js-modules
+                 process-global-js-modules)]
     (swap! compiler-env assoc :js-dependency-index (deps/js-dependency-index opts))
     opts))
 

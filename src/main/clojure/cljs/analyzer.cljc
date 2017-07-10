@@ -1962,7 +1962,7 @@
 (defn foreign-dep?
   #?(:cljs {:tag boolean})
   [dep]
-  {:pre [(symbol? dep)]}
+  {:pre [(or (symbol? dep) (string? dep))]}
   (let [js-index (:js-dependency-index @env/*compiler*)]
     (if-some [[_ {:keys [foreign]}] (find js-index (name dep))]
       foreign
@@ -2002,7 +2002,8 @@
   (let [js-lib (get-in cenv [:js-dependency-index (name lib)])]
     (and (= (get-in cenv [::namespaces lib :defs sym] ::not-found) ::not-found)
          (not (= (get js-lib :group) :goog))
-         (not (get js-lib :closure-lib)))))
+         (not (get js-lib :closure-lib))
+         (not (get js-lib :js-global)))))
 
 (defn missing-rename? [sym cenv]
   (let [lib (symbol (namespace sym))
