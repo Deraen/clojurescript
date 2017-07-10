@@ -393,8 +393,7 @@
                                             (:url-min this))]
                         [url-min (:file-min this)]
                         [(:url this) (:file this)])]
-       (or url (if file
-                 (deps/to-url file))))))
+       (or url (deps/to-url file)))))
   (-relative-path
     ([this] (deps/-relative-path this nil))
     ([this opts]
