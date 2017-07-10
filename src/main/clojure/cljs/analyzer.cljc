@@ -2002,8 +2002,7 @@
   (let [js-lib (get-in cenv [:js-dependency-index (name lib)])]
     (and (= (get-in cenv [::namespaces lib :defs sym] ::not-found) ::not-found)
          (not (= (get js-lib :group) :goog))
-         (not (get js-lib :closure-lib))
-         (not (get js-lib :js-global)))))
+         (not (get js-lib :closure-lib)))))
 
 (defn missing-rename? [sym cenv]
   (let [lib (symbol (namespace sym))
