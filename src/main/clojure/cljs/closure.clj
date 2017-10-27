@@ -62,7 +62,7 @@
               Result JSError CheckLevel DiagnosticGroups
               CommandLineRunner AnonymousFunctionNamingPolicy
               JSModule SourceMap Es6RewriteModules]
-           [com.google.javascript.jscomp.deps ModuleLoader$ResolutionMode]
+           [com.google.javascript.jscomp.deps ModuleLoader$ResolutionMode ModuleNames]
            [com.google.javascript.rhino Node]
            [java.nio.file Path Paths Files StandardWatchEventKinds WatchKey
                           WatchEvent FileVisitor FileVisitResult]
@@ -107,7 +107,6 @@
    :check-useless-code DiagnosticGroups/CHECK_USELESS_CODE
    :check-variables DiagnosticGroups/CHECK_VARIABLES
    :closure-dep-method-usage-checks DiagnosticGroups/CLOSURE_DEP_METHOD_USAGE_CHECKS
-   :common-js-module-load DiagnosticGroups/COMMON_JS_MODULE_LOAD
    :conformance-violations DiagnosticGroups/CONFORMANCE_VIOLATIONS
    :const DiagnosticGroups/CONST
    :constant-property DiagnosticGroups/CONSTANT_PROPERTY
@@ -1650,14 +1649,19 @@
     (into {} (map (juxt #(.getSourceFileName ^Node %) identity) source-nodes))))
 
 (defn add-converted-source
-  [closure-compiler result-nodes opts {:keys [file-min file] :as ijs}]
+  [closure-compiler result-nodes opts {:keys [file-min file requires] :as ijs}]
   (let [processed-file (if-let [min (and (#{:advanced :simple} (:optimizations opts))
                                          file-min)]
                          min
                          file)
         processed-file (string/replace processed-file "\\" "/")]
     (assoc ijs :source
-      (.toSource closure-compiler ^Node (get result-nodes processed-file)))))
+      ;; Add goog.provide call ourselves, not emited by Closure since
+      ;; https://github.com/google/closure-compiler/pull/2641
+      (str
+        "goog.provide(\"" (ModuleNames/fileToModuleName processed-file) "\");\n"
+        ;; TODO: Do we need to emit goog.require also?
+        (.toSource closure-compiler ^Node (get result-nodes processed-file))))))
 
 (defn convert-js-modules
   "Takes a list JavaScript modules as an IJavaScript and rewrites them into a Google
