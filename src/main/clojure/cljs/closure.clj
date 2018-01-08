@@ -58,12 +58,14 @@
            [java.util.concurrent
             TimeUnit LinkedBlockingDeque Executors CountDownLatch]
            [com.google.javascript.jscomp CompilerOptions CompilationLevel
+              CompilerInput DependencyOptions
               CompilerOptions$LanguageMode SourceMap$Format
               SourceMap$DetailLevel ClosureCodingConvention SourceFile
               Result JSError CheckLevel DiagnosticGroups
               CommandLineRunner AnonymousFunctionNamingPolicy
-              JSModule SourceMap Es6RewriteModules VariableMap]
-           [com.google.javascript.jscomp.deps ModuleLoader$ResolutionMode]
+              JSModule SourceMap Es6RewriteModules VariableMap
+              ProcessCommonJSModules Es6RewriteScriptsToModules]
+           [com.google.javascript.jscomp.deps ModuleLoader$ResolutionMode ModuleNames]
            [com.google.javascript.rhino Node]
            [java.nio.file Path Paths Files StandardWatchEventKinds WatchKey
                           WatchEvent FileVisitor FileVisitResult]
@@ -108,7 +110,6 @@
    :check-useless-code DiagnosticGroups/CHECK_USELESS_CODE
    :check-variables DiagnosticGroups/CHECK_VARIABLES
    :closure-dep-method-usage-checks DiagnosticGroups/CLOSURE_DEP_METHOD_USAGE_CHECKS
-   :common-js-module-load DiagnosticGroups/COMMON_JS_MODULE_LOAD
    :conformance-violations DiagnosticGroups/CONFORMANCE_VIOLATIONS
    :const DiagnosticGroups/CONST
    :constant-property DiagnosticGroups/CONSTANT_PROPERTY
@@ -1695,24 +1696,24 @@
     (assoc-in [:closure-warnings :non-standard-jsdoc] :off)
     (set-options (CompilerOptions.))))
 
-(defn get-js-root [closure-compiler]
-  (.getSecondChild (.getRoot closure-compiler)))
-
-(defn get-closure-sources
-  "Gets map of source file name -> Node, for files in Closure Compiler js root."
-  [closure-compiler]
-  (let [source-nodes (.children (get-js-root closure-compiler))]
-    (into {} (map (juxt #(.getSourceFileName ^Node %) identity) source-nodes))))
-
 (defn add-converted-source
-  [closure-compiler result-nodes opts {:keys [file-min file] :as ijs}]
+  [closure-compiler inputs-by-name opts {:keys [file-min file requires] :as ijs}]
   (let [processed-file (if-let [min (and (#{:advanced :simple} (:optimizations opts))
                                          file-min)]
                          min
                          file)
-        processed-file (string/replace processed-file "\\" "/")]
+        processed-file (string/replace processed-file "\\" "/")
+        ^CompilerInput input (get inputs-by-name processed-file)
+        ^Node ast-root (.getAstRoot input closure-compiler)]
     (assoc ijs :source
-      (.toSource closure-compiler ^Node (get result-nodes processed-file)))))
+      ;; Add goog.provide/require calls ourselves, not emited by Closure since
+      ;; https://github.com/google/closure-compiler/pull/2641
+      (str
+        "goog.provide(\"" (ModuleNames/fileToModuleName processed-file) "\");\n"
+        (apply str (map (fn [n]
+                          (str "goog.require(\"" n "\");\n"))
+                        (.getRequires input)))
+        (.toSource closure-compiler ast-root)))))
 
 (defn convert-js-modules
   "Takes a list JavaScript modules as an IJavaScript and rewrites them into a Google
@@ -1727,18 +1728,24 @@
                                      (boolean (some (fn [{:keys [module-type]}]
                                                       (= module-type :amd)) js-modules)))
                                    (.setLanguageIn (lang-key->lang-mode :ecmascript6))
-                                   (.setLanguageOut (lang-key->lang-mode (:language-out opts :ecmascript3))))
+                                   (.setLanguageOut (lang-key->lang-mode (:language-out opts :ecmascript3)))
+                                   (.setDependencyOptions (doto (DependencyOptions.)
+                                                            (.setDependencySorting true))))
         _ (when (= (:target opts) :nodejs)
             (.setPackageJsonEntryNames options ^List '("module", "main")))
         closure-compiler (doto (make-closure-compiler)
                            (.init externs source-files options))
         _ (.parse closure-compiler)
         _ (report-failure (.getResult closure-compiler))
-        root (.getRoot closure-compiler)]
-    (.process (Es6RewriteModules. closure-compiler)
-      (.getFirstChild root) (.getSecondChild root))
+        root (.getRoot closure-compiler)
+        inputs-by-name (into {} (map (juxt #(.getName %) identity) (vals (.getInputsById closure-compiler))))]
+
+    (.process (ProcessCommonJSModules. closure-compiler) (.getFirstChild root) (.getSecondChild root))
+    (.process (Es6RewriteScriptsToModules. closure-compiler) (.getFirstChild root) (.getSecondChild root))
+    (.process (Es6RewriteModules. closure-compiler) (.getFirstChild root) (.getSecondChild root))
+
     (map (partial add-converted-source
-           closure-compiler (get-closure-sources closure-compiler) opts)
+           closure-compiler inputs-by-name opts)
       js-modules)))
 
 (defmulti js-transforms
