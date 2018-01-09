@@ -6,4 +6,4 @@
 (enable-console-print!)
 
 (println "ReactDOMServer exists:" ReactDOMServer
-  (.-renderToString ReactDOMServer))
+  (ReactDOMServer/renderToString nil))

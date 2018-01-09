@@ -1704,16 +1704,23 @@
                          file)
         processed-file (string/replace processed-file "\\" "/")
         ^CompilerInput input (get inputs-by-name processed-file)
-        ^Node ast-root (.getAstRoot input closure-compiler)]
+        ^Node ast-root (.getAstRoot input closure-compiler)
+        module-name (ModuleNames/fileToModuleName processed-file)]
     (assoc ijs :source
       ;; Add goog.provide/require calls ourselves, not emited by Closure since
       ;; https://github.com/google/closure-compiler/pull/2641
       (str
-        "goog.provide(\"" (ModuleNames/fileToModuleName processed-file) "\");\n"
+        "goog.provide(\"" module-name "\");\n"
         (apply str (map (fn [n]
                           (str "goog.require(\"" n "\");\n"))
                         (.getRequires input)))
-        (.toSource closure-compiler ast-root)))))
+        (.toSource closure-compiler ast-root)
+        "\n\n"
+        "if (" module-name "[\"default\"]) {\n"
+        "  " module-name ".default$ = " module-name "[\"default\"];\n"
+        "} else {\n"
+        "  " module-name ".default$ = " module-name ";\n"
+        "}\n"))))
 
 (defn convert-js-modules
   "Takes a list JavaScript modules as an IJavaScript and rewrites them into a Google

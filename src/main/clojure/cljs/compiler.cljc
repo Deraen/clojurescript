@@ -382,6 +382,11 @@
             (emit-wrap env
               (emits
                 (cond-> info
+                  ;; FIXME: Module name hack
+                  (string/starts-with? var-name "module$") (update :name (fn [n]
+                                                                           (if (namespace n)
+                                                                             (symbol (str (namespace n) ".default$") (name n))
+                                                                             (symbol (str (name n) ".default$")))))
                   (not= form 'js/-Infinity) (munge reserved))))))))))
 
 (defmethod emit* :var-special
