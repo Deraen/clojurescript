@@ -1714,13 +1714,7 @@
         (apply str (map (fn [n]
                           (str "goog.require(\"" n "\");\n"))
                         (.getRequires input)))
-        (.toSource closure-compiler ast-root)
-        "\n\n"
-        "if (" module-name "[\"default\"]) {\n"
-        "  " module-name ".default$ = " module-name "[\"default\"];\n"
-        "} else {\n"
-        "  " module-name ".default$ = " module-name ";\n"
-        "}\n"))))
+        (.toSource closure-compiler ast-root)))))
 
 (defn convert-js-modules
   "Takes a list JavaScript modules as an IJavaScript and rewrites them into a Google

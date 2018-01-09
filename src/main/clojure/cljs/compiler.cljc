@@ -380,14 +380,14 @@
                                 (some? (namespace var-name)))
                            (set/difference ana/es5-allowed))]
             (emit-wrap env
-              (emits
-                (cond-> info
-                  ;; FIXME: Module name hack
-                  (string/starts-with? var-name "module$") (update :name (fn [n]
-                                                                           (if (namespace n)
-                                                                             (symbol (str (namespace n) ".default$") (name n))
-                                                                             (symbol (str (name n) ".default$")))))
-                  (not= form 'js/-Infinity) (munge reserved))))))))))
+              (if (string/starts-with? var-name "module$")
+                (let [n (:name info)]
+                  (if (namespace n)
+                    (emits (munge (namespace n) reserved) "[\"default\"]." (munge (name n) reserved))
+                    (emits (munge (name n) reserved) "[\"default\"]")))
+                (emits
+                  (cond-> info
+                          (not= form 'js/-Infinity) (munge reserved)))))))))))
 
 (defmethod emit* :var-special
   [{:keys [env var sym meta] :as arg}]
