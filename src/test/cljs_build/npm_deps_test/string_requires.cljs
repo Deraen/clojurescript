@@ -4,6 +4,7 @@
             ["lodash-es/toArray" :refer [default] :rename {default toArray}]
             ["lodash-es/toFinite" :as toFinite]
             ["lodash-es/array" :as array]
+            ["lodash-es/takeRight" :default take-right]
             [npm-deps-test.string-requires-in-classpath]))
 
 (enable-console-print!)
@@ -22,3 +23,6 @@
 
 ;; es6
 (array/findIndex #js [1 2] 2)
+
+;; es6 default with :default require
+(take-right #js [1 2])

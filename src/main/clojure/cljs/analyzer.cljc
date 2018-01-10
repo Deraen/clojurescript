@@ -2261,7 +2261,7 @@
         (error env
           (parse-ns-error-msg spec
             "Only :as alias, :refer (names) and :rename {from to} options supported in :require"))))
-    (when-not (every? #{:as :refer :rename} (map first (partition 2 (next spec))))
+    (when-not (every? #{:as :refer :rename :default} (map first (partition 2 (next spec))))
       (throw
         (error env
           (parse-ns-error-msg spec
@@ -2361,12 +2361,16 @@
             [lib js-module-provides] (if-some [js-module-name (gets @env/*compiler* :js-module-index (str lib) :name)]
                                        [(symbol js-module-name) lib]
                                        [lib nil])
-            {alias :as referred :refer renamed :rename
+            {alias :as referred :refer renamed :rename default :default
              :or {alias (if (string? lib)
                           (symbol (munge lib))
                           lib)}}
             (apply hash-map opts)
             referred-without-renamed (seq (remove (set (keys renamed)) referred))
+            ;; :default is shortcut for ES6 default property, rewritten to :refer [default] :rename {default name}
+            [referred renamed] (if (some? default)
+                                 [(conj referred 'default) (assoc renamed 'default default)]
+                                 [referred renamed])
             [rk uk renk] (if macros? [:require-macros :use-macros :rename-macros] [:require :use :rename])]
         (when-not (or (symbol? alias) (nil? alias))
           (throw
